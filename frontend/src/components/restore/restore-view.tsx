@@ -4,6 +4,7 @@ import { History, Info, RotateCcw } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 import { useState } from "react"
 
+import { ALL, ClearFiltersButton, FilterSelect, TablePagination, TableToolbar, useCursorPaging } from "@/components/app/data-table"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
 import { PageHeader, SectionHeader } from "@/components/app/page-header"
@@ -15,15 +16,29 @@ import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDateTime, formatDuration } from "@/lib/format"
 import { useOrg } from "@/lib/org"
-import { useRestores } from "@/lib/queries"
+import { useDatabases, useRestores, type RestoreFilters } from "@/lib/queries"
 
 import { RestoreDetailDialog } from "./restore-detail"
 import { RestoreWizardDialog } from "./restore-wizard"
 
+const RESTORE_STATUSES = ["queued", "running", "verifying", "completed", "failed", "cancelled"]
+
 export function RestoreView() {
   const { can } = useOrg()
   const params = useSearchParams()
-  const { data, isPending, error, refetch } = useRestores()
+  const [databaseId, setDatabaseId] = useState(ALL)
+  const [status, setStatus] = useState(ALL)
+  const [mode, setMode] = useState(ALL)
+  const { data: databases } = useDatabases()
+  const filters: RestoreFilters = {
+    target_database_id: databaseId === ALL ? undefined : databaseId,
+    status: status === ALL ? undefined : status,
+    mode: mode === ALL ? undefined : mode,
+  }
+  const filtered = databaseId !== ALL || status !== ALL || mode !== ALL
+  const query = useRestores(filters)
+  const { isPending, error, refetch } = query
+  const paging = useCursorPaging(query, JSON.stringify(filters))
   const [selected, setSelected] = useState<string | null>(null)
   const presetBackup = params.get("backup") ?? undefined
   // Arriving from a backup's "Restore" action opens the form right away.
@@ -62,53 +77,95 @@ export function RestoreView() {
 
       <section>
         <SectionHeader title="Restore history" description="Queued, running and past restores in this organization." />
+        <TableToolbar>
+          <FilterSelect
+            value={databaseId}
+            onChange={setDatabaseId}
+            label="Filter by target database"
+            allLabel="All targets"
+            className="w-48"
+            options={(databases ?? []).map((d) => ({ value: d.id, label: d.name }))}
+          />
+          <FilterSelect
+            value={status}
+            onChange={setStatus}
+            label="Filter by status"
+            allLabel="All statuses"
+            options={RESTORE_STATUSES.map((s) => ({ value: s, label: s.charAt(0).toUpperCase() + s.slice(1) }))}
+          />
+          <FilterSelect
+            value={mode}
+            onChange={setMode}
+            label="Filter by mode"
+            allLabel="Any mode"
+            options={[
+              { value: "new", label: "New database" },
+              { value: "existing", label: "Overwrite" },
+            ]}
+          />
+          <ClearFiltersButton
+            show={filtered}
+            onClear={() => {
+              setDatabaseId(ALL)
+              setStatus(ALL)
+              setMode(ALL)
+            }}
+          />
+        </TableToolbar>
         {error ? (
           <ErrorState error={error} retry={() => refetch()} />
         ) : isPending ? (
           <TableSkeleton rows={3} columns={6} />
-        ) : data.length === 0 ? (
+        ) : paging.props.total === 0 ? (
           <EmptyState
             icon={History}
-            title="No restores yet"
-            description="When you restore a backup, its progress, verification and logs appear here. Tip: restore into a new database regularly to rehearse disaster recovery."
-            action={canRestore ? newRestore : undefined}
+            title={filtered ? "No restores match these filters" : "No restores yet"}
+            description={
+              filtered
+                ? "Try a different target database, status or mode."
+                : "When you restore a backup, its progress, verification and logs appear here. Tip: restore into a new database regularly to rehearse disaster recovery."
+            }
+            action={!filtered && canRestore ? newRestore : undefined}
           />
         ) : (
-          <div className="overflow-hidden rounded-xl border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Source</TableHead>
-                  <TableHead className="hidden md:table-cell">Backup from</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead className="hidden sm:table-cell">Mode</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden lg:table-cell">Requested by</TableHead>
-                  <TableHead className="hidden text-right lg:table-cell">Duration</TableHead>
-                  <TableHead className="pr-4 text-right">Created</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.map((r) => (
-                  <TableRow key={r.id} className="cursor-pointer" onClick={() => setSelected(r.id)}>
-                    <TableCell className="pl-4 font-medium">{r.source_database_name}</TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(r.backup_created_at)}</TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs">{r.mode === "new" ? r.new_database_name : r.target_database_name}</span>
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{r.mode === "new" ? "New" : "Overwrite"}</TableCell>
-                    <TableCell>
-                      <StatusBadge status={r.status} />
-                    </TableCell>
-                    <TableCell className="hidden max-w-48 truncate text-muted-foreground lg:table-cell">{r.requested_by_email ?? "—"}</TableCell>
-                    <TableCell className="hidden text-right tabular lg:table-cell">{formatDuration(r.duration_ms)}</TableCell>
-                    <TableCell className="pr-4 text-right text-muted-foreground">
-                      <RelativeTime date={r.created_at} />
-                    </TableCell>
+          <div className="space-y-3">
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-4">Source</TableHead>
+                    <TableHead className="hidden md:table-cell">Backup from</TableHead>
+                    <TableHead>Target</TableHead>
+                    <TableHead className="hidden sm:table-cell">Mode</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="hidden lg:table-cell">Requested by</TableHead>
+                    <TableHead className="hidden text-right lg:table-cell">Duration</TableHead>
+                    <TableHead className="pr-4 text-right">Created</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {paging.rows.map((r) => (
+                    <TableRow key={r.id} className="cursor-pointer" onClick={() => setSelected(r.id)}>
+                      <TableCell className="pl-4 font-medium">{r.source_database_name}</TableCell>
+                      <TableCell className="hidden text-muted-foreground md:table-cell">{formatDateTime(r.backup_created_at)}</TableCell>
+                      <TableCell>
+                        <span className="font-mono text-xs">{r.mode === "new" ? r.new_database_name : r.target_database_name}</span>
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">{r.mode === "new" ? "New" : "Overwrite"}</TableCell>
+                      <TableCell>
+                        <StatusBadge status={r.status} />
+                      </TableCell>
+                      <TableCell className="hidden max-w-48 truncate text-muted-foreground lg:table-cell">{r.requested_by_email ?? "—"}</TableCell>
+                      <TableCell className="hidden text-right tabular lg:table-cell">{formatDuration(r.duration_ms)}</TableCell>
+                      <TableCell className="pr-4 text-right text-muted-foreground">
+                        <RelativeTime date={r.created_at} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <TablePagination {...paging.props} noun="restores" />
           </div>
         )}
       </section>

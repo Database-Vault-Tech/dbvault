@@ -49,6 +49,14 @@ import type {
   SystemStatus,
 } from "./types"
 
+/** Builds a filter query string, dropping empty values, plus the cursor. */
+function searchParams(filters: Record<string, string | undefined | null>, before?: string) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(filters)) if (v) p.set(k, v)
+  if (before) p.set("before", before)
+  return p.toString()
+}
+
 export const keys = {
   me: ["me"] as const,
   system: ["system"] as const,
@@ -64,11 +72,11 @@ export const keys = {
   backups: (filters: BackupFilters) => ["backups", filters] as const,
   backup: (id: string) => ["backup", id] as const,
   job: (id: string) => ["job", id] as const,
-  restores: ["restores"] as const,
+  restores: (filters: RestoreFilters) => ["restores", filters] as const,
   restore: (id: string) => ["restore", id] as const,
   notifications: ["notifications"] as const,
   notificationEvents: ["notifications", "events"] as const,
-  deliveries: ["notifications", "deliveries"] as const,
+  deliveries: (filters: DeliveryFilters) => ["notifications", "deliveries", filters] as const,
   audit: (filters: AuditFilters) => ["audit", filters] as const,
   organization: ["organization"] as const,
   members: ["team", "members"] as const,
@@ -395,7 +403,7 @@ export function useCancelJob() {
     onSuccess: () => {
       invalidateBackupViews(qc)
       void qc.invalidateQueries({ queryKey: ["job"] })
-      void qc.invalidateQueries({ queryKey: keys.restores })
+      void qc.invalidateQueries({ queryKey: ["restores"] })
       void qc.invalidateQueries({ queryKey: ["restore"] })
     },
   })
@@ -403,11 +411,19 @@ export function useCancelJob() {
 
 // --------------------------------------------------------------- restores
 
-export function useRestores() {
-  return useQuery({
-    queryKey: keys.restores,
-    queryFn: () => api.get<RestoreJob[]>("/restores"),
-    refetchInterval: (q) => (q.state.data?.some((r) => ACTIVE_RESTORE.has(r.status)) ? 2000 : false),
+export interface RestoreFilters {
+  target_database_id?: string
+  status?: string
+  mode?: string
+}
+
+export function useRestores(filters: RestoreFilters = {}) {
+  return useInfiniteQuery({
+    queryKey: keys.restores(filters),
+    queryFn: ({ pageParam }) => api.list<RestoreJob>(`/restores?${searchParams({ ...filters }, pageParam)}`),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.meta?.next_before,
+    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.data.some((r) => ACTIVE_RESTORE.has(r.status))) ? 2000 : false),
   })
 }
 
@@ -424,7 +440,7 @@ export function useCreateRestore() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (input: RestoreInput) => api.post<RestoreJob>("/restores", input),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.restores }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["restores"] }),
   })
 }
 
@@ -442,11 +458,19 @@ export function useNotificationEvents() {
   })
 }
 
-export function useDeliveries() {
-  return useQuery({
-    queryKey: keys.deliveries,
-    queryFn: () => api.get<NotificationDelivery[]>("/notifications/deliveries?limit=50"),
-    refetchInterval: (q) => (q.state.data?.some((d) => d.status === "pending") ? 3000 : false),
+export interface DeliveryFilters {
+  notification_id?: string
+  event?: string
+  status?: string
+}
+
+export function useDeliveries(filters: DeliveryFilters = {}) {
+  return useInfiniteQuery({
+    queryKey: keys.deliveries(filters),
+    queryFn: ({ pageParam }) => api.list<NotificationDelivery>(`/notifications/deliveries?${searchParams({ ...filters }, pageParam)}`),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.meta?.next_before,
+    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.data.some((d) => d.status === "pending")) ? 3000 : false),
   })
 }
 
@@ -479,7 +503,7 @@ export function useTestNotification() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.post<{ delivery_id: string }>(`/notifications/${id}/test`),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.deliveries }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["notifications", "deliveries"] }),
   })
 }
 

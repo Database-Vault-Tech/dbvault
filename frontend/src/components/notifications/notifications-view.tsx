@@ -5,6 +5,7 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
+import { ALL, ClearFiltersButton, FilterSelect, TablePagination, TableToolbar, useCursorPaging } from "@/components/app/data-table"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
 import { PageHeader, SectionHeader } from "@/components/app/page-header"
@@ -13,18 +14,20 @@ import { StatusBadge } from "@/components/app/status"
 import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { errorMessage } from "@/lib/api"
 import { useOrg } from "@/lib/org"
-import { useDeleteNotification, useDeliveries, useNotifications, useTestNotification, useUpdateNotification } from "@/lib/queries"
+import {
+  useDeleteNotification,
+  useDeliveries,
+  useNotificationEvents,
+  useNotifications,
+  useTestNotification,
+  useUpdateNotification,
+  type DeliveryFilters,
+} from "@/lib/queries"
 import type { NotificationChannel } from "@/lib/types"
 
 import { ChannelDialog } from "./channel-form"
@@ -32,7 +35,18 @@ import { ChannelDialog } from "./channel-form"
 export function NotificationsView() {
   const { can } = useOrg()
   const channels = useNotifications()
-  const deliveries = useDeliveries()
+  const [channelId, setChannelId] = useState(ALL)
+  const [event, setEvent] = useState(ALL)
+  const [status, setStatus] = useState(ALL)
+  const events = useNotificationEvents()
+  const deliveryFilters: DeliveryFilters = {
+    notification_id: channelId === ALL ? undefined : channelId,
+    event: event === ALL ? undefined : event,
+    status: status === ALL ? undefined : status,
+  }
+  const deliveriesFiltered = channelId !== ALL || event !== ALL || status !== ALL
+  const deliveries = useDeliveries(deliveryFilters)
+  const deliveryPaging = useCursorPaging(deliveries, JSON.stringify(deliveryFilters))
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<NotificationChannel>()
   const [deleting, setDeleting] = useState<NotificationChannel>()
@@ -91,53 +105,102 @@ export function NotificationsView() {
 
       <section>
         <SectionHeader title="Recent deliveries" description="Every notification attempt, including retries. Failed deliveries are retried up to 4 times." />
+        <TableToolbar>
+          <FilterSelect
+            value={channelId}
+            onChange={setChannelId}
+            label="Filter by channel"
+            allLabel="All channels"
+            className="w-48"
+            options={(channels.data ?? []).map((c) => ({ value: c.id, label: c.name }))}
+          />
+          <FilterSelect
+            value={event}
+            onChange={setEvent}
+            label="Filter by event"
+            allLabel="All events"
+            className="w-52"
+            options={(events.data?.events ?? []).map((e) => ({ value: e.type, label: e.label }))}
+          />
+          <FilterSelect
+            value={status}
+            onChange={setStatus}
+            label="Filter by status"
+            allLabel="All statuses"
+            options={[
+              { value: "delivered", label: "Delivered" },
+              { value: "pending", label: "Pending" },
+              { value: "failed", label: "Failed" },
+            ]}
+          />
+          <ClearFiltersButton
+            show={deliveriesFiltered}
+            onClear={() => {
+              setChannelId(ALL)
+              setEvent(ALL)
+              setStatus(ALL)
+            }}
+          />
+        </TableToolbar>
         {deliveries.isPending ? (
           <TableSkeleton rows={3} columns={5} />
         ) : deliveries.error ? (
           <ErrorState error={deliveries.error} retry={() => deliveries.refetch()} />
-        ) : deliveries.data?.length === 0 ? (
-          <EmptyState icon={Send} title="No deliveries yet" description="Send a test from a channel to check it works end to end." className="py-10" />
+        ) : deliveryPaging.props.total === 0 ? (
+          <EmptyState
+            icon={Send}
+            title={deliveriesFiltered ? "No deliveries match these filters" : "No deliveries yet"}
+            description={deliveriesFiltered ? "Try a different channel, event or status." : "Send a test from a channel to check it works end to end."}
+            className="py-10"
+          />
         ) : (
-          <div className="overflow-hidden rounded-xl border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Channel</TableHead>
-                  <TableHead>Event</TableHead>
-                  <TableHead className="hidden lg:table-cell">Title</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">Attempts</TableHead>
-                  <TableHead className="pr-4 text-right">Time</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {deliveries.data?.map((d) => (
-                  <TableRow key={d.id}>
-                    <TableCell className="pl-4">
-                      <span className="flex items-center gap-1.5">
-                        {d.channel_type === "email" ? <Mail className="size-3.5 text-muted-foreground" /> : <Webhook className="size-3.5 text-muted-foreground" />}
-                        {d.channel_name}
-                      </span>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{d.event}</TableCell>
-                    <TableCell className="hidden max-w-xs truncate lg:table-cell">{d.title}</TableCell>
-                    <TableCell>
-                      <div className="flex flex-col items-start gap-1">
-                        <StatusBadge status={d.status} />
-                        {d.error && <span className="max-w-xs text-xs whitespace-normal text-destructive">{d.error}</span>}
-                      </div>
-                    </TableCell>
-                    <TableCell className="hidden text-right tabular sm:table-cell">
-                      {d.attempts}
-                      {d.response_status ? <span className="text-muted-foreground"> · HTTP {d.response_status}</span> : null}
-                    </TableCell>
-                    <TableCell className="pr-4 text-right text-muted-foreground">
-                      <RelativeTime date={d.created_at} />
-                    </TableCell>
+          <div className="space-y-3">
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-4">Channel</TableHead>
+                    <TableHead>Event</TableHead>
+                    <TableHead className="hidden lg:table-cell">Title</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Attempts</TableHead>
+                    <TableHead className="pr-4 text-right">Time</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {deliveryPaging.rows.map((d) => (
+                    <TableRow key={d.id}>
+                      <TableCell className="pl-4">
+                        <span className="flex items-center gap-1.5">
+                          {d.channel_type === "email" ? (
+                            <Mail className="size-3.5 text-muted-foreground" />
+                          ) : (
+                            <Webhook className="size-3.5 text-muted-foreground" />
+                          )}
+                          {d.channel_name}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{d.event}</TableCell>
+                      <TableCell className="hidden max-w-xs truncate lg:table-cell">{d.title}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col items-start gap-1">
+                          <StatusBadge status={d.status} />
+                          {d.error && <span className="max-w-xs text-xs whitespace-normal text-destructive">{d.error}</span>}
+                        </div>
+                      </TableCell>
+                      <TableCell className="hidden text-right tabular sm:table-cell">
+                        {d.attempts}
+                        {d.response_status ? <span className="text-muted-foreground"> · HTTP {d.response_status}</span> : null}
+                      </TableCell>
+                      <TableCell className="pr-4 text-right text-muted-foreground">
+                        <RelativeTime date={d.created_at} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <TablePagination {...deliveryPaging.props} noun="deliveries" />
           </div>
         )}
       </section>
