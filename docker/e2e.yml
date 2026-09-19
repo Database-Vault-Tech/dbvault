@@ -1,4 +1,5 @@
-# Adds a sample PostgreSQL database with data for demos and end-to-end tests.
+# Adds sample PostgreSQL, MySQL and MariaDB databases with data for demos
+# and end-to-end tests (user shop, password shop-password, database shop).
 #   docker compose -f docker-compose.yml -f docker/e2e.yml up -d
 services:
   sample-postgres:
@@ -14,3 +15,37 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+
+  sample-mysql:
+    image: mysql:8.4
+    # Binary logging is on (as in production); allow non-SUPER users to
+    # create triggers so restores as the demo user work.
+    command: ["--innodb-buffer-pool-size=64M", "--performance-schema=OFF", "--log-bin-trust-function-creators=1"]
+    environment:
+      MYSQL_ROOT_PASSWORD: shop-root-password
+      MYSQL_USER: shop
+      MYSQL_PASSWORD: shop-password
+      MYSQL_DATABASE: shop
+    volumes:
+      - ./docker/sample-data-mysql.sql:/docker-entrypoint-initdb.d/sample-data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -ushop -pshop-password shop -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  sample-mariadb:
+    image: mariadb:11.4
+    command: ["--innodb-buffer-pool-size=64M"]
+    environment:
+      MARIADB_ROOT_PASSWORD: shop-root-password
+      MARIADB_USER: shop
+      MARIADB_PASSWORD: shop-password
+      MARIADB_DATABASE: shop
+    volumes:
+      - ./docker/sample-data-mysql.sql:/docker-entrypoint-initdb.d/sample-data.sql:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
