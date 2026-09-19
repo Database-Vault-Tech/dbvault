@@ -89,7 +89,7 @@ export function UserMenu() {
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuItem asChild>
-          <a href="https://github.com/dbvault/dbvault#readme" target="_blank" rel="noreferrer">
+          <a href="https://github.com/Database-Vault-Tech/dbvault#readme" target="_blank" rel="noreferrer">
             <BookOpen /> Documentation
           </a>
         </DropdownMenuItem>

@@ -32,7 +32,7 @@ export function OpenSource() {
         </div>
         <div className="min-w-0 space-y-4">
           <Terminal title="~ install">
-            <Prompt>git clone https://github.com/dbvault/dbvault &amp;&amp; cd dbvault</Prompt>
+            <Prompt>git clone https://github.com/Database-Vault-Tech/dbvault &amp;&amp; cd dbvault</Prompt>
             <Prompt>cp .env.example .env</Prompt>
             <Prompt>docker compose up -d</Prompt>
             <span className="block text-muted-foreground">✔ Dashboard ready at http://localhost:3000</span>
