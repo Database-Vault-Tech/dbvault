@@ -13,6 +13,7 @@ import (
 
 	"github.com/dbvault/dbvault/backend/internal/app"
 	"github.com/dbvault/dbvault/backend/internal/config"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/logging"
 	"github.com/dbvault/dbvault/backend/internal/server"
@@ -50,13 +51,29 @@ func main() {
 		log.Error("pg_dump not found: backups will fail until PostgreSQL client tools are installed", "error", err.Error())
 		caps["pg_dump_version"] = nil
 	}
-	if a.Restores.Sandbox != nil {
-		if err := a.Restores.Sandbox.Check(ctx); err != nil {
-			caps["verify_detail"] = err.Error()
-		} else {
-			caps["verify_available"] = true
-			caps["verify_detail"] = "Restore tests run in a " + a.Restores.Sandbox.Name() + " sandbox"
+	// Per-engine readiness: client tools present and restore tests possible.
+	engines := map[string]any{}
+	for _, drv := range a.Drivers.Drivers() {
+		toolErr := drv.CheckRestoreTool(ctx)
+		if toolErr != nil {
+			log.Warn("database client tools not found: backups of this engine will fail until they are installed", "engine", drv.Name(), "error", toolErr.Error())
 		}
+		e := map[string]any{"label": drv.Label(), "tools_available": toolErr == nil, "verify_available": false}
+		if a.Restores.Sandbox != nil {
+			if err := a.Restores.Sandbox.Check(ctx, drv); err != nil {
+				e["verify_detail"] = err.Error()
+			} else {
+				e["verify_available"] = true
+				e["verify_detail"] = "Restore tests run in a " + a.Restores.Sandbox.Name() + " sandbox"
+			}
+		} else {
+			e["verify_detail"] = a.Restores.SandboxUnavailableReason
+		}
+		engines[drv.Name()] = e
+	}
+	caps["engines"] = engines
+	if pg, ok := engines[engine.Postgres].(map[string]any); ok {
+		caps["verify_available"], caps["verify_detail"] = pg["verify_available"], pg["verify_detail"]
 	}
 
 	hostname, _ := os.Hostname()

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -20,8 +19,8 @@ import (
 type Sandbox interface {
 	// Name describes the sandbox kind for reports ("docker", "server").
 	Name() string
-	// Check reports whether the sandbox can currently be used.
-	Check(ctx context.Context) error
+	// Check reports whether the sandbox can currently test drv's backups.
+	Check(ctx context.Context, drv engine.Driver) error
 	// Provision creates an empty database able to restore a backup of the
 	// given engine and major version. The instance must always be destroyed.
 	Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error)
@@ -74,39 +73,55 @@ func waitReady(ctx context.Context, drv engine.Driver, t engine.Target, timeout 
 }
 
 // ServerSandbox creates a throwaway database on a dedicated server
-// (VERIFY_POSTGRES_URL) for each test and drops it afterwards. It needs no
-// Docker access. Use a server that holds no other data.
+// (VERIFY_POSTGRES_URL, VERIFY_MYSQL_URL, VERIFY_MARIADB_URL) for each test
+// and drops it afterwards. It needs no Docker access. Use a server that
+// holds no other data.
 type ServerSandbox struct {
 	admin engine.Target
 	drv   engine.Driver
 }
 
-// NewServerSandbox parses the admin connection URL of a PostgreSQL server.
+// NewServerSandbox parses the admin connection URL of a verification
+// server for drv's engine, e.g. postgres://postgres:pw@verify-postgres/postgres
+// or mysql://root:pw@verify-mysql:3306/.
 func NewServerSandbox(adminURL string, drv engine.Driver) (*ServerSandbox, error) {
 	u, err := url.Parse(adminURL)
-	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
-		return nil, errors.New("VERIFY_POSTGRES_URL must be a postgres:// URL")
+	if err != nil || !schemeMatches(u.Scheme, drv.Name()) {
+		return nil, fmt.Errorf("the %s verification server URL must start with %s://", drv.Label(), drv.Name())
 	}
-	port := 5432
+	port := drv.DefaultPort()
 	if p := u.Port(); p != "" {
 		port, _ = strconv.Atoi(p)
 	}
 	pw, _ := u.User.Password()
 	sslmode := u.Query().Get("sslmode")
 	if sslmode == "" {
-		sslmode = "prefer"
+		sslmode = drv.DefaultSSLMode()
 	}
 	db := strings.TrimPrefix(u.Path, "/")
-	if db == "" {
+	if db == "" && drv.Name() == engine.Postgres {
 		db = "postgres"
 	}
 	return &ServerSandbox{drv: drv, admin: engine.Target{Engine: drv.Name(), Host: u.Hostname(), Port: port, Database: db,
 		Username: u.User.Username(), Password: pw, SSLMode: sslmode}}, nil
 }
 
+func schemeMatches(scheme, engineName string) bool {
+	switch engineName {
+	case engine.Postgres:
+		return scheme == "postgres" || scheme == "postgresql"
+	case engine.MariaDB:
+		return scheme == "mariadb" || scheme == "mysql"
+	}
+	return scheme == engineName
+}
+
 func (s *ServerSandbox) Name() string { return "server" }
 
-func (s *ServerSandbox) Check(ctx context.Context) error {
+func (s *ServerSandbox) Check(ctx context.Context, drv engine.Driver) error {
+	if drv.Name() != s.drv.Name() {
+		return fmt.Errorf("the verification server runs %s, so it can't test %s backups; use VERIFY_MODE=docker", s.drv.Label(), drv.Label())
+	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if _, err := s.drv.Inspect(ctx, s.admin); err != nil {
@@ -124,7 +139,7 @@ func (s *ServerSandbox) Provision(ctx context.Context, drv engine.Driver, major 
 		return nil, fmt.Errorf("verification server unreachable: %w", err)
 	}
 	if major > info.Major {
-		return nil, fmt.Errorf("the verification server runs %s %d but the backup is from %s %d; use a newer VERIFY_POSTGRES_URL server or VERIFY_MODE=docker",
+		return nil, fmt.Errorf("the verification server runs %s %d but the backup is from %s %d; use a newer verification server or VERIFY_MODE=docker",
 			s.drv.Label(), info.Major, drv.Label(), major)
 	}
 	name := "dbvault_verify_" + randomHex(6)
@@ -138,4 +153,34 @@ func (s *ServerSandbox) Provision(ctx context.Context, drv engine.Driver, major 
 		Description: fmt.Sprintf("temporary database on verification server (%s %d)", s.drv.Label(), info.Major),
 		destroy:     func(ctx context.Context) error { return sdrv.DropDatabase(ctx, admin, name) },
 	}, nil
+}
+
+// ServerSandboxes routes each engine to its own verification server.
+type ServerSandboxes map[string]*ServerSandbox
+
+func (m ServerSandboxes) Name() string { return "server" }
+
+func (m ServerSandboxes) get(drv engine.Driver) (*ServerSandbox, error) {
+	sb, ok := m[drv.Name()]
+	if !ok {
+		return nil, fmt.Errorf("no verification server is configured for %s: set VERIFY_%s_URL or use VERIFY_MODE=docker",
+			drv.Label(), strings.ToUpper(drv.Name()))
+	}
+	return sb, nil
+}
+
+func (m ServerSandboxes) Check(ctx context.Context, drv engine.Driver) error {
+	sb, err := m.get(drv)
+	if err != nil {
+		return err
+	}
+	return sb.Check(ctx, drv)
+}
+
+func (m ServerSandboxes) Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error) {
+	sb, err := m.get(drv)
+	if err != nil {
+		return nil, err
+	}
+	return sb.Provision(ctx, drv, major)
 }

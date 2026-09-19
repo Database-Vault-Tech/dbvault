@@ -18,6 +18,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/db"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
 	"github.com/dbvault/dbvault/backend/internal/engine"
+	"github.com/dbvault/dbvault/backend/internal/engine/mysql"
 	"github.com/dbvault/dbvault/backend/internal/engine/postgres"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
@@ -52,6 +53,8 @@ type App struct {
 	Schedules     *scheduler.Service
 	Tools         pgtools.Tools
 	Postgres      *postgres.Driver
+	MySQL         *mysql.Driver
+	MariaDB       *mysql.Driver
 	Drivers       *engine.Registry
 }
 
@@ -105,7 +108,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 	a.Mailer = notifications.NewSMTPMailer(cfg.SMTP)
 	a.Tools = pgtools.Tools{BinDir: cfg.PgBinDir}
 	a.Postgres = postgres.New(a.Tools, cfg.WorkDir)
-	a.Drivers = engine.NewRegistry(a.Postgres)
+	a.MySQL = mysql.NewMySQL(cfg.MySQLBinDir, cfg.WorkDir)
+	a.MariaDB = mysql.NewMariaDB(cfg.MySQLBinDir, cfg.WorkDir)
+	a.Drivers = engine.NewRegistry(a.Postgres, a.MySQL, a.MariaDB)
 	hasher := auth.NewHasher(cfg.AuthSecret)
 
 	a.Organizations = &organizations.Service{Pool: pool, Keys: a.Keys, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL}
@@ -136,19 +141,33 @@ func (a *App) ConfigureSandbox(ctx context.Context) {
 			a.Restores.SandboxUnavailableReason = err.Error()
 			return
 		}
-		if err := sb.Check(ctx); err != nil {
+		if err := sb.Check(ctx, a.Postgres); err != nil {
 			a.Log.Warn("docker restore sandbox unavailable at startup (will retry per verification)", "error", err.Error())
 		} else if n, err := sb.RemoveStale(ctx, 2*time.Hour); err == nil && n > 0 {
 			a.Log.Info("removed stale verification containers", "count", n)
 		}
 		a.Restores.Sandbox = sb
 	case config.VerifyModeServer:
-		sb, err := restore.NewServerSandbox(a.Config.VerifyPostgresURL, a.Postgres)
-		if err != nil {
-			a.Restores.SandboxUnavailableReason = err.Error()
+		sandboxes := restore.ServerSandboxes{}
+		for _, s := range []struct {
+			url string
+			drv engine.Driver
+		}{{a.Config.VerifyPostgresURL, a.Postgres}, {a.Config.VerifyMySQLURL, a.MySQL}, {a.Config.VerifyMariaDBURL, a.MariaDB}} {
+			if s.url == "" {
+				continue
+			}
+			sb, err := restore.NewServerSandbox(s.url, s.drv)
+			if err != nil {
+				a.Log.Error("invalid verification server URL", "engine", s.drv.Name(), "error", err.Error())
+				continue
+			}
+			sandboxes[s.drv.Name()] = sb
+		}
+		if len(sandboxes) == 0 {
+			a.Restores.SandboxUnavailableReason = "no valid verification server URL is configured"
 			return
 		}
-		a.Restores.Sandbox = sb
+		a.Restores.Sandbox = sandboxes
 	default:
 		a.Restores.SandboxUnavailableReason = "VERIFY_MODE is disabled"
 	}

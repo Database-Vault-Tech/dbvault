@@ -20,8 +20,8 @@ import (
 
 const sandboxLabel = "dbvault.verify"
 
-// DockerSandbox starts a temporary PostgreSQL container per restore test,
-// matching the backup's major version, and removes it afterwards. It talks
+// DockerSandbox starts a temporary database container per restore test,
+// matching the backup's engine and major version, and removes it afterwards. It talks
 // to the Docker Engine API directly (no Docker SDK dependency).
 type DockerSandbox struct {
 	client        *http.Client
@@ -102,7 +102,7 @@ type dockerError struct {
 
 func (e *dockerError) Error() string { return fmt.Sprintf("docker: %s (HTTP %d)", e.msg, e.status) }
 
-func (d *DockerSandbox) Check(ctx context.Context) error {
+func (d *DockerSandbox) Check(ctx context.Context, _ engine.Driver) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, d.base+"/_ping", nil)

@@ -7,11 +7,13 @@ import (
 
 	"github.com/dbvault/dbvault/backend/internal/apperr"
 	"github.com/dbvault/dbvault/backend/internal/auth"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/httpx"
 	"github.com/dbvault/dbvault/backend/internal/reqctx"
 )
 
 func (s *Service) Routes(r chi.Router) {
+	r.Get("/database-engines", s.handleEngines)
 	r.Get("/databases", s.handleList)
 	r.Post("/databases", s.handleCreate)
 	r.Post("/databases/test", s.handleTestUnsaved)
@@ -28,6 +30,26 @@ func idParam(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// EngineInfo describes a supported database engine for the UI.
+type EngineInfo struct {
+	Name           string              `json:"name"`
+	Label          string              `json:"label"`
+	DefaultPort    int                 `json:"default_port"`
+	SSLModes       []string            `json:"ssl_modes"`
+	DefaultSSLMode string              `json:"default_ssl_mode"`
+	FileExtension  string              `json:"file_extension"`
+	Capabilities   engine.Capabilities `json:"capabilities"`
+}
+
+func (s *Service) handleEngines(w http.ResponseWriter, r *http.Request) {
+	out := []EngineInfo{}
+	for _, d := range s.Drivers.Drivers() {
+		out = append(out, EngineInfo{Name: d.Name(), Label: d.Label(), DefaultPort: d.DefaultPort(), SSLModes: d.SSLModes(),
+			DefaultSSLMode: d.DefaultSSLMode(), FileExtension: d.FileExtension(), Capabilities: d.Capabilities()})
+	}
+	httpx.JSON(w, http.StatusOK, out)
 }
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {

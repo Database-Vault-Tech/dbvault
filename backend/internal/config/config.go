@@ -55,12 +55,15 @@ type Config struct {
 	WorkerHealthAddr    string
 	WorkDir             string
 	PgBinDir            string
+	MySQLBinDir         string
 	VerifyUploadedData  bool
 	ShutdownGracePeriod time.Duration
 
 	// Restore verification sandbox
 	VerifyMode          string
 	VerifyPostgresURL   string
+	VerifyMySQLURL      string
+	VerifyMariaDBURL    string
 	VerifyDockerHost    string
 	VerifyDockerNetwork string
 	VerifyDockerImage   string
@@ -120,10 +123,13 @@ func Load() (*Config, error) {
 		WorkerHealthAddr:           env("WORKER_HEALTH_ADDR", ":8081"),
 		WorkDir:                    env("WORK_DIR", filepath.Join(os.TempDir(), "dbvault")),
 		PgBinDir:                   env("PG_BIN_DIR", ""),
+		MySQLBinDir:                env("MYSQL_BIN_DIR", ""),
 		VerifyUploadedData:         envBool("VERIFY_UPLOADED_DATA", true),
 		ShutdownGracePeriod:        envDuration("WORKER_SHUTDOWN_GRACE_PERIOD", 5*time.Minute),
 		VerifyMode:                 env("VERIFY_MODE", VerifyModeDisabled),
 		VerifyPostgresURL:          env("VERIFY_POSTGRES_URL", ""),
+		VerifyMySQLURL:             env("VERIFY_MYSQL_URL", ""),
+		VerifyMariaDBURL:           env("VERIFY_MARIADB_URL", ""),
 		VerifyDockerHost:           env("VERIFY_DOCKER_HOST", "unix:///var/run/docker.sock"),
 		VerifyDockerNetwork:        env("VERIFY_DOCKER_NETWORK", ""),
 		VerifyDockerImage:          env("VERIFY_DOCKER_IMAGE", "postgres:{major}-alpine"),
@@ -163,8 +169,8 @@ func Load() (*Config, error) {
 	switch c.VerifyMode {
 	case VerifyModeDocker, VerifyModeDisabled:
 	case VerifyModeServer:
-		if c.VerifyPostgresURL == "" {
-			return nil, errors.New("VERIFY_POSTGRES_URL is required when VERIFY_MODE=server")
+		if c.VerifyPostgresURL == "" && c.VerifyMySQLURL == "" && c.VerifyMariaDBURL == "" {
+			return nil, errors.New("VERIFY_MODE=server needs VERIFY_POSTGRES_URL (and/or VERIFY_MYSQL_URL, VERIFY_MARIADB_URL)")
 		}
 	default:
 		return nil, fmt.Errorf("VERIFY_MODE must be one of docker, server, disabled (got %q)", c.VerifyMode)

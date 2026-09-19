@@ -585,7 +585,7 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		return finish()
 	}
 	rep.TablesExpected = len(tbls)
-	log.Infof("Archive decrypted and decompressed; %d tables in table of contents", len(tbls))
+	log.Infof("Archive decrypted and decompressed; %d tables found in the archive", len(tbls))
 
 	if s.Sandbox == nil {
 		msg := UnavailableMessage
@@ -597,7 +597,7 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		rep.Database = Check{Status: CheckUnavailable, Message: "Requires a restore test"}
 		return finish()
 	}
-	if err := s.Sandbox.Check(ctx); err != nil {
+	if err := s.Sandbox.Check(ctx, drv); err != nil {
 		msg := UnavailableMessage + ": " + err.Error()
 		log.Warnf("%s", msg)
 		rep.Restore = Check{Status: CheckUnavailable, Message: msg}

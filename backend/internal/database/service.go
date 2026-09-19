@@ -198,8 +198,10 @@ func (in *Input) Validate(drivers *engine.Registry, requirePassword bool) error 
 	v.Required("database", in.DatabaseName)
 	v.MaxLen("database", in.DatabaseName, 63)
 	// Database names are passed to libpq via PGDATABASE; reject values
-	// libpq could interpret as a connection string.
-	v.Check(!strings.ContainsAny(in.DatabaseName, "=\x00") && !strings.Contains(in.DatabaseName, "://"), "database", "Contains characters that are not allowed.")
+	// libpq could interpret as a connection string, and (for the MySQL
+	// tools, which take it as an argument) values that look like options.
+	v.Check(!strings.ContainsAny(in.DatabaseName, "=\x00") && !strings.Contains(in.DatabaseName, "://") && !strings.HasPrefix(in.DatabaseName, "-"),
+		"database", "Contains characters that are not allowed.")
 	v.Required("username", in.Username)
 	v.MaxLen("username", in.Username, 63)
 	if requirePassword {
