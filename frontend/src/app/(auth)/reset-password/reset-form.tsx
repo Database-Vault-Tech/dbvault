@@ -6,10 +6,10 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { AuthHeader } from "@/components/auth/auth-form"
+import { AuthPasswordInput } from "@/components/auth/auth-input"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, errorMessage } from "@/lib/api"
 
@@ -56,10 +56,10 @@ export function ResetPasswordForm() {
           )}
           <Field>
             <FieldLabel htmlFor="password">New password</FieldLabel>
-            <Input id="password" type="password" autoComplete="new-password" minLength={10} required value={password} onChange={(e) => setPassword(e.target.value)} />
+            <AuthPasswordInput id="password" placeholder="New password" autoComplete="new-password" minLength={10} required value={password} onChange={(e) => setPassword(e.target.value)} />
             <FieldDescription>At least 10 characters.</FieldDescription>
           </Field>
-          <Button type="submit" size="lg" disabled={pending || password.length < 10}>
+          <Button type="submit" size="lg" className="h-11 text-[15px]" disabled={pending || password.length < 10}>
             {pending && <Spinner />} Update password
           </Button>
         </FieldGroup>

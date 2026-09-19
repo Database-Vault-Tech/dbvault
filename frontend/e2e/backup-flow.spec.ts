@@ -24,7 +24,7 @@ test("register, protect a database, back it up, verify and restore it", async ({
   await page.goto("/register")
   await page.getByLabel("Name").fill("E2E Tester")
   await page.getByLabel("Work email").fill(email)
-  await page.getByLabel("Password").fill(password)
+  await page.locator("#password").fill(password)
   await page.getByRole("button", { name: "Create account" }).click()
   await expect(page).toHaveURL(/\/dashboard/)
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible()
@@ -34,7 +34,7 @@ test("register, protect a database, back it up, verify and restore it", async ({
   await page.getByRole("menuitem", { name: "Sign out" }).click()
   await expect(page).toHaveURL(/\/login/)
   await page.getByLabel("Email").fill(email)
-  await page.getByLabel("Password").fill(password)
+  await page.locator("#password").fill(password)
   await page.getByRole("button", { name: "Sign in" }).click()
   await expect(page).toHaveURL(/\/dashboard/)
 

@@ -2,17 +2,18 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQueryClient } from "@tanstack/react-query"
+import { Mail, User } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 
 import { AuthHeader } from "@/components/auth/auth-form"
+import { AuthInput, AuthPasswordInput } from "@/components/auth/auth-input"
 import { FormField } from "@/components/app/form-field"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { FieldGroup } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, ApiError, errorMessage } from "@/lib/api"
 import { registerSchema, type RegisterValues } from "@/lib/schemas"
@@ -61,15 +62,15 @@ export function RegisterForm() {
             </Alert>
           )}
           <FormField id="name" label="Name" error={form.formState.errors.name}>
-            <Input id="name" autoComplete="name" autoFocus {...form.register("name")} />
+            <AuthInput id="name" icon={User} placeholder="Ada Lovelace" autoComplete="name" autoFocus {...form.register("name")} />
           </FormField>
           <FormField id="email" label="Work email" error={form.formState.errors.email}>
-            <Input id="email" type="email" autoComplete="email" {...form.register("email")} />
+            <AuthInput id="email" type="email" icon={Mail} placeholder="you@company.com" autoComplete="email" {...form.register("email")} />
           </FormField>
           <FormField id="password" label="Password" description="At least 10 characters." error={form.formState.errors.password}>
-            <Input id="password" type="password" autoComplete="new-password" {...form.register("password")} />
+            <AuthPasswordInput id="password" placeholder="Create a password" autoComplete="new-password" {...form.register("password")} />
           </FormField>
-          <Button type="submit" size="lg" disabled={form.formState.isSubmitting}>
+          <Button type="submit" size="lg" className="h-11 text-[15px]" disabled={form.formState.isSubmitting}>
             {form.formState.isSubmitting && <Spinner />} Create account
           </Button>
           <p className="text-xs text-muted-foreground">

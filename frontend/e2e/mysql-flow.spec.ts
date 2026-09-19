@@ -16,7 +16,7 @@ for (const engine of engines) {
     await page.goto("/register")
     await page.getByLabel("Name").fill("E2E Tester")
     await page.getByLabel("Work email").fill(`e2e-${engine.label.toLowerCase()}-${Date.now()}@example.com`)
-    await page.getByLabel("Password").fill("correct-horse-battery")
+    await page.locator("#password").fill("correct-horse-battery")
     await page.getByRole("button", { name: "Create account" }).click()
     await expect(page).toHaveURL(/\/dashboard/)
     await page.goto("/storage?new=1")

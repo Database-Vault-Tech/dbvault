@@ -1,13 +1,14 @@
 "use client"
 
+import { Mail } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
 
 import { AuthHeader } from "@/components/auth/auth-form"
+import { AuthInput } from "@/components/auth/auth-input"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, errorMessage } from "@/lib/api"
 
@@ -56,9 +57,9 @@ export default function ForgotPasswordPage() {
             )}
             <Field>
               <FieldLabel htmlFor="email">Email</FieldLabel>
-              <Input id="email" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
+              <AuthInput id="email" type="email" icon={Mail} placeholder="you@company.com" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} />
             </Field>
-            <Button type="submit" size="lg" disabled={pending || !email}>
+            <Button type="submit" size="lg" className="h-11 text-[15px]" disabled={pending || !email}>
               {pending && <Spinner />} Send reset link
             </Button>
           </FieldGroup>

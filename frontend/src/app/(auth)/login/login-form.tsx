@@ -2,17 +2,18 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQueryClient } from "@tanstack/react-query"
+import { Mail } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 
 import { AuthHeader, safeNext } from "@/components/auth/auth-form"
+import { AuthInput, AuthPasswordInput } from "@/components/auth/auth-input"
 import { FormField } from "@/components/app/form-field"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { FieldGroup } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import { api, errorMessage } from "@/lib/api"
 import { loginSchema, type LoginValues } from "@/lib/schemas"
@@ -56,7 +57,7 @@ export function LoginForm() {
             </Alert>
           )}
           <FormField id="email" label="Email" error={form.formState.errors.email}>
-            <Input id="email" type="email" autoComplete="email" autoFocus {...form.register("email")} />
+            <AuthInput id="email" type="email" icon={Mail} placeholder="you@company.com" autoComplete="email" autoFocus {...form.register("email")} />
           </FormField>
           <FormField
             id="password"
@@ -70,9 +71,9 @@ export function LoginForm() {
             }
             error={form.formState.errors.password}
           >
-            <Input id="password" type="password" autoComplete="current-password" {...form.register("password")} />
+            <AuthPasswordInput id="password" placeholder="Enter your password" autoComplete="current-password" {...form.register("password")} />
           </FormField>
-          <Button type="submit" size="lg" disabled={form.formState.isSubmitting}>
+          <Button type="submit" size="lg" className="h-11 text-[15px]" disabled={form.formState.isSubmitting}>
             {form.formState.isSubmitting && <Spinner />} Sign in
           </Button>
         </FieldGroup>
