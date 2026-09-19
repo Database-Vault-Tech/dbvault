@@ -1,0 +1,53 @@
+name: Bug report
+description: Something doesn't work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Security issues must not be reported here** — see SECURITY.md.
+        Please never paste passwords, access keys, ENCRYPTION_KEY or recovery keys.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Add a PostgreSQL 16 database with sslmode=require
+        2. Run a backup to Cloudflare R2
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Backup/job logs from the dashboard or `docker compose logs worker` (secrets are redacted automatically, but please double-check).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: DBVault version
+      description: Shown in the sidebar, or `dbvault version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker Compose
+        - Kubernetes / other orchestrator
+        - Binaries
+    validations:
+      required: true
+  - type: input
+    id: postgres
+    attributes:
+      label: PostgreSQL version(s) being backed up
