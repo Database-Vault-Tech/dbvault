@@ -1,5 +1,6 @@
-// Package database manages the PostgreSQL databases DBVault protects.
-package database
+// Package postgres is the PostgreSQL driver: it connects with pgx and uses
+// the official pg_dump / pg_restore tools for backups and restores.
+package postgres
 
 import (
 	"context"
@@ -14,29 +15,19 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/dbvault/dbvault/backend/internal/engine"
 )
 
-// Target holds everything needed to connect to a protected database.
-// Password is plaintext in memory only; it is never serialised to JSON.
-type Target struct {
-	Host        string
-	Port        int
-	Database    string
-	Username    string
-	Password    string `json:"-"`
-	SSLMode     string
-	SSLRootCert string
-}
-
-// Materialized is a Target prepared for use, possibly with a temp CA file.
+// Materialized is a target prepared for use, possibly with a temp CA file.
 type Materialized struct {
-	target   Target
+	target   engine.Target
 	certPath string
 }
 
 // Materialize writes the optional CA certificate to a private temp file.
 // Call Close to remove it.
-func (t Target) Materialize(workDir string) (*Materialized, error) {
+func Materialize(t engine.Target, workDir string) (*Materialized, error) {
 	m := &Materialized{target: t}
 	if strings.TrimSpace(t.SSLRootCert) != "" {
 		if err := os.MkdirAll(workDir, 0o700); err != nil {
@@ -133,55 +124,26 @@ func (m *Materialized) Connect(ctx context.Context, dbName string) (*pgx.Conn, e
 	return conn, nil
 }
 
-// ServerInfo describes a PostgreSQL server and database.
-type ServerInfo struct {
-	Version      string `json:"version"`
-	VersionNum   int    `json:"version_num"`
-	Major        int    `json:"major"`
-	SizeBytes    int64  `json:"size_bytes"`
-	TableCount   int    `json:"table_count"`
-	FullVersion  string `json:"full_version"`
-	CurrentUser  string `json:"current_user"`
-	IsSuperuser  bool   `json:"is_superuser"`
-	InRecovery   bool   `json:"in_recovery"`
-	LatencyMilli int64  `json:"latency_ms"`
-}
-
 // Inspect connects and gathers server information.
-func (m *Materialized) Inspect(ctx context.Context) (ServerInfo, error) {
+func (m *Materialized) Inspect(ctx context.Context) (engine.ServerInfo, error) {
 	info, err := m.inspect(ctx)
 	if err != nil {
-		return info, withLocalhostHint(m.target.Host, err)
+		return info, engine.LocalhostHint(m.target.Host, err)
 	}
 	return info, nil
 }
 
-// withLocalhostHint explains the most common self-hosting mistake: inside a
-// container, "localhost" is the container itself, not the host machine.
-func withLocalhostHint(host string, err error) error {
-	switch strings.ToLower(strings.Trim(host, "[]")) {
-	case "localhost", "127.0.0.1", "::1":
-	default:
-		return err
-	}
-	if _, statErr := os.Stat("/.dockerenv"); statErr != nil {
-		return err
-	}
-	return fmt.Errorf("%w. DBVault runs in Docker, so %q refers to the DBVault container itself: "+
-		"use host.docker.internal for a database on this machine, or the database container's name if it shares a Docker network", err, host)
-}
-
-func (m *Materialized) inspect(ctx context.Context) (ServerInfo, error) {
+func (m *Materialized) inspect(ctx context.Context) (engine.ServerInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	start := time.Now()
 	conn, err := m.Connect(ctx, "")
 	if err != nil {
-		return ServerInfo{}, err
+		return engine.ServerInfo{}, err
 	}
 	defer conn.Close(context.WithoutCancel(ctx))
 
-	var info ServerInfo
+	var info engine.ServerInfo
 	var superuser string
 	err = conn.QueryRow(ctx, `SELECT current_setting('server_version'),
 	                                 current_setting('server_version_num')::int,
@@ -194,7 +156,7 @@ func (m *Materialized) inspect(ctx context.Context) (ServerInfo, error) {
 	                                   WHERE schemaname NOT IN ('pg_catalog', 'information_schema'))`).
 		Scan(&info.Version, &info.VersionNum, &info.FullVersion, &info.SizeBytes, &info.CurrentUser, &superuser, &info.InRecovery, &info.TableCount)
 	if err != nil {
-		return ServerInfo{}, FriendlyError(err)
+		return engine.ServerInfo{}, FriendlyError(err)
 	}
 	info.Version = strings.Fields(info.Version)[0]
 	info.Major = info.VersionNum / 10000
