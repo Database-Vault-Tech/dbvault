@@ -4,12 +4,13 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useQueryClient } from "@tanstack/react-query"
 import { MailPlus, Users } from "lucide-react"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { Controller, useForm } from "react-hook-form"
 import { toast } from "sonner"
 import { z } from "zod"
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
+import { ALL, ClearFiltersButton, FilterSelect, matches, TablePagination, TableSearch, TableToolbar, usePaging } from "@/components/app/data-table"
 import { CopyField } from "@/components/app/copy-button"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
@@ -44,6 +45,13 @@ const ROLES: { role: Role; description: string }[] = [
 export function TeamSettings() {
   const { can, me } = useOrg()
   const members = useMembers()
+  const [memberSearch, setMemberSearch] = useState("")
+  const [roleFilter, setRoleFilter] = useState(ALL)
+  const memberRows = useMemo(
+    () => (members.data ?? []).filter((m) => matches(memberSearch, m.name, m.email) && (roleFilter === ALL || m.role === roleFilter)),
+    [members.data, memberSearch, roleFilter],
+  )
+  const memberPaging = usePaging(memberRows, JSON.stringify({ memberSearch, roleFilter }))
   const invitations = useInvitations(can("admin"))
   const [inviting, setInviting] = useState(false)
   const [removing, setRemoving] = useState<Member>()
@@ -69,27 +77,51 @@ export function TeamSettings() {
       />
       <SettingsNav />
       <div className="space-y-8">
+        {!members.isPending && (members.data?.length ?? 0) > 0 && (
+          <TableToolbar>
+            <TableSearch value={memberSearch} onChange={setMemberSearch} placeholder="Search name or email…" />
+            <FilterSelect
+              value={roleFilter}
+              onChange={setRoleFilter}
+              label="Filter by role"
+              allLabel="All roles"
+              options={["owner", "admin", "member", "viewer"].map((r) => ({ value: r, label: r.charAt(0).toUpperCase() + r.slice(1) }))}
+            />
+            <ClearFiltersButton
+              show={memberSearch.trim() !== "" || roleFilter !== ALL}
+              onClear={() => {
+                setMemberSearch("")
+                setRoleFilter(ALL)
+              }}
+            />
+          </TableToolbar>
+        )}
         {members.error && <ErrorState error={members.error} retry={() => members.refetch()} />}
         {members.isPending ? (
           <TableSkeleton rows={3} columns={5} />
+        ) : memberRows.length === 0 ? (
+          <EmptyState icon={Users} title="No members match these filters" description="Try a different search or role." className="py-10" />
         ) : (
-          <div className="overflow-hidden rounded-xl border bg-card">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-4">Member</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead className="hidden md:table-cell">Joined</TableHead>
-                  <TableHead className="hidden md:table-cell">Last login</TableHead>
-                  <TableHead className="pr-4 text-right" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {members.data?.map((m) => (
-                  <MemberRow key={m.user_id} m={m} onRemove={() => setRemoving(m)} />
-                ))}
-              </TableBody>
-            </Table>
+          <div className="space-y-3">
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-4">Member</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead className="hidden md:table-cell">Joined</TableHead>
+                    <TableHead className="hidden md:table-cell">Last login</TableHead>
+                    <TableHead className="pr-4 text-right" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {memberPaging.rows.map((m) => (
+                    <MemberRow key={m.user_id} m={m} onRemove={() => setRemoving(m)} />
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <TablePagination {...memberPaging.props} noun="members" />
           </div>
         )}
 
@@ -99,7 +131,12 @@ export function TeamSettings() {
             {invitations.isPending ? (
               <TableSkeleton rows={2} columns={4} />
             ) : invitations.data?.length === 0 ? (
-              <EmptyState icon={Users} title="No pending invitations" description="Invite teammates to share responsibility for your backups." className="py-10" />
+              <EmptyState
+                icon={Users}
+                title="No pending invitations"
+                description="Invite teammates to share responsibility for your backups."
+                className="py-10"
+              />
             ) : (
               <div className="overflow-hidden rounded-xl border bg-card">
                 <Table>
@@ -217,7 +254,10 @@ function MemberRow({ m, onRemove }: { m: Member; onRemove: () => void }) {
             onValueChange={(role) =>
               change.mutate(
                 { userId: m.user_id, role: role as Role },
-                { onSuccess: () => toast.success(`${m.name} is now ${role}`), onError: (e) => toast.error("Couldn't change role", { description: errorMessage(e) }) },
+                {
+                  onSuccess: () => toast.success(`${m.name} is now ${role}`),
+                  onError: (e) => toast.error("Couldn't change role", { description: errorMessage(e) }),
+                },
               )
             }
           >
@@ -274,7 +314,9 @@ function InviteDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
             <DialogHeader>
               <DialogTitle>Invitation created</DialogTitle>
               <DialogDescription>
-                {result.emailSent ? "We emailed the invitation. You can also share this link directly:" : "Email isn't configured on this server — share this link with your teammate:"}
+                {result.emailSent
+                  ? "We emailed the invitation. You can also share this link directly:"
+                  : "Email isn't configured on this server — share this link with your teammate:"}
               </DialogDescription>
             </DialogHeader>
             <CopyField value={result.url} />

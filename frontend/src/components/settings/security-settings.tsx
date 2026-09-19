@@ -2,12 +2,13 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { AlertTriangle, Download, KeyRound, Laptop, Plus } from "lucide-react"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
 import { z } from "zod"
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
+import { matches, TablePagination, TableSearch, TableToolbar, usePaging } from "@/components/app/data-table"
 import { CopyField } from "@/components/app/copy-button"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
@@ -101,8 +102,28 @@ function PasswordCard() {
 
 function summarizeAgent(ua: string | null): string {
   if (!ua) return "Unknown device"
-  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /curl/.test(ua) ? "curl" : "Browser"
-  const os = /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "macOS" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : ""
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /Firefox\//.test(ua)
+      ? "Firefox"
+      : /Chrome\//.test(ua)
+        ? "Chrome"
+        : /Safari\//.test(ua)
+          ? "Safari"
+          : /curl/.test(ua)
+            ? "curl"
+            : "Browser"
+  const os = /Windows/.test(ua)
+    ? "Windows"
+    : /Mac OS X/.test(ua)
+      ? "macOS"
+      : /Android/.test(ua)
+        ? "Android"
+        : /iPhone|iPad/.test(ua)
+          ? "iOS"
+          : /Linux/.test(ua)
+            ? "Linux"
+            : ""
   return os ? `${browser} on ${os}` : browser
 }
 
@@ -110,6 +131,9 @@ function SessionsCard() {
   const sessions = useSessions()
   const revoke = useRevokeSession()
   const [target, setTarget] = useState<Session>()
+  const [search, setSearch] = useState("")
+  const rows = useMemo(() => (sessions.data ?? []).filter((s) => matches(search, summarizeAgent(s.user_agent), s.ip_address)), [sessions.data, search])
+  const paging = usePaging(rows, search)
   return (
     <Card>
       <CardHeader>
@@ -122,27 +146,35 @@ function SessionsCard() {
         ) : sessions.isPending ? (
           <TableSkeleton rows={2} columns={4} />
         ) : (
-          <ul className="divide-y rounded-lg border">
-            {sessions.data?.map((s) => (
-              <li key={s.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5 text-sm">
-                <Laptop className="size-4 text-muted-foreground" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 font-medium">
-                    {summarizeAgent(s.user_agent)}
-                    {s.current && <Badge variant="secondary">This device</Badge>}
+          <div className="space-y-3">
+            {(sessions.data?.length ?? 0) > 1 && (
+              <TableToolbar className="mb-0">
+                <TableSearch value={search} onChange={setSearch} placeholder="Search device or IP…" />
+              </TableToolbar>
+            )}
+            <ul className="divide-y rounded-lg border">
+              {paging.rows.map((s) => (
+                <li key={s.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5 text-sm">
+                  <Laptop className="size-4 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 font-medium">
+                      {summarizeAgent(s.user_agent)}
+                      {s.current && <Badge variant="secondary">This device</Badge>}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      <span className="font-mono">{s.ip_address ?? "unknown IP"}</span> · last seen <RelativeTime date={s.last_seen_at} />
+                    </div>
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    <span className="font-mono">{s.ip_address ?? "unknown IP"}</span> · last seen <RelativeTime date={s.last_seen_at} />
-                  </div>
-                </div>
-                {!s.current && (
-                  <Button variant="ghost" size="sm" onClick={() => setTarget(s)}>
-                    Revoke
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+                  {!s.current && (
+                    <Button variant="ghost" size="sm" onClick={() => setTarget(s)}>
+                      Revoke
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <TablePagination {...paging.props} noun="sessions" />
+          </div>
         )}
       </CardContent>
       <ConfirmDialog
@@ -169,6 +201,9 @@ function SessionsCard() {
 
 function TokensCard() {
   const tokens = useApiTokens()
+  const [search, setSearch] = useState("")
+  const rows = useMemo(() => (tokens.data ?? []).filter((t) => matches(search, t.name, t.prefix)), [tokens.data, search])
+  const paging = usePaging(rows, search)
   const revoke = useRevokeApiToken()
   const [creating, setCreating] = useState(false)
   const [target, setTarget] = useState<ApiToken>()
@@ -189,35 +224,52 @@ function TokensCard() {
         ) : tokens.isPending ? (
           <TableSkeleton rows={2} columns={4} />
         ) : tokens.data?.length === 0 ? (
-          <EmptyState icon={KeyRound} title="No API tokens" description="Create a token to use the dbvault CLI, or run `dbvault init` to sign in." className="py-10" />
+          <EmptyState
+            icon={KeyRound}
+            title="No API tokens"
+            description="Create a token to use the dbvault CLI, or run `dbvault init` to sign in."
+            className="py-10"
+          />
         ) : (
-          <div className="overflow-hidden rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead className="pl-3">Name</TableHead>
-                  <TableHead>Token</TableHead>
-                  <TableHead className="hidden sm:table-cell">Last used</TableHead>
-                  <TableHead className="hidden sm:table-cell">Expires</TableHead>
-                  <TableHead className="pr-3" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tokens.data?.map((t) => (
-                  <TableRow key={t.id}>
-                    <TableCell className="pl-3 font-medium">{t.name}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">{t.prefix}…</TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{t.last_used_at ? <RelativeTime date={t.last_used_at} /> : "Never"}</TableCell>
-                    <TableCell className="hidden text-muted-foreground sm:table-cell">{t.expires_at ? <RelativeTime date={t.expires_at} /> : "Never"}</TableCell>
-                    <TableCell className="pr-3 text-right">
-                      <Button variant="ghost" size="sm" onClick={() => setTarget(t)}>
-                        Revoke
-                      </Button>
-                    </TableCell>
+          <div className="space-y-3">
+            {(tokens.data?.length ?? 0) > 1 && (
+              <TableToolbar className="mb-0">
+                <TableSearch value={search} onChange={setSearch} placeholder="Search tokens…" />
+              </TableToolbar>
+            )}
+            <div className="overflow-hidden rounded-lg border">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="pl-3">Name</TableHead>
+                    <TableHead>Token</TableHead>
+                    <TableHead className="hidden sm:table-cell">Last used</TableHead>
+                    <TableHead className="hidden sm:table-cell">Expires</TableHead>
+                    <TableHead className="pr-3" />
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {paging.rows.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="pl-3 font-medium">{t.name}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{t.prefix}…</TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {t.last_used_at ? <RelativeTime date={t.last_used_at} /> : "Never"}
+                      </TableCell>
+                      <TableCell className="hidden text-muted-foreground sm:table-cell">
+                        {t.expires_at ? <RelativeTime date={t.expires_at} /> : "Never"}
+                      </TableCell>
+                      <TableCell className="pr-3 text-right">
+                        <Button variant="ghost" size="sm" onClick={() => setTarget(t)}>
+                          Revoke
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            <TablePagination {...paging.props} noun="tokens" />
           </div>
         )}
       </CardContent>
@@ -349,8 +401,8 @@ function RecoveryKeyCard() {
       <CardHeader>
         <CardTitle>Backup recovery key</CardTitle>
         <CardDescription>
-          Backups are encrypted with this organization&apos;s age key, which the server seals with its ENCRYPTION_KEY. Export it and store it offline (a password
-          manager or safe) so backups can be decrypted with the standard <code className="font-mono">age</code> CLI even if DBVault itself is lost.
+          Backups are encrypted with this organization&apos;s age key, which the server seals with its ENCRYPTION_KEY. Export it and store it offline (a
+          password manager or safe) so backups can be decrypted with the standard <code className="font-mono">age</code> CLI even if DBVault itself is lost.
         </CardDescription>
         <CardAction>
           <Button variant="outline" size="sm" onClick={() => setOpen(true)}>

@@ -3,10 +3,11 @@
 import { Archive, CalendarClock, FlaskConical, Lock, LockOpen, MoreHorizontal, Pencil, Play, Plus, Trash2 } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
 import { ConfirmDialog } from "@/components/app/confirm-dialog"
+import { ALL, ClearFiltersButton, FilterSelect, matches, TablePagination, TableSearch, TableToolbar, usePaging } from "@/components/app/data-table"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
 import { PageHeader } from "@/components/app/page-header"
@@ -16,13 +17,7 @@ import { StorageBadge } from "@/components/app/storage-badge"
 import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -40,6 +35,9 @@ export function SchedulesView() {
   const router = useRouter()
   const { can } = useOrg()
   const schedules = useSchedules()
+  const [search, setSearch] = useState("")
+  const [databaseId, setDatabaseId] = useState(ALL)
+  const [enabled, setEnabled] = useState(ALL)
   const databases = useDatabases()
   const storage = useStorage()
   const [creating, setCreating] = useState(params.get("new") === "1")
@@ -52,6 +50,18 @@ export function SchedulesView() {
     setCreating(o)
     if (!o && (params.get("new") || params.get("database"))) router.replace("/schedules")
   }
+  const scheduleFilters = search.trim() !== "" || databaseId !== ALL || enabled !== ALL
+  const rows = useMemo(
+    () =>
+      (schedules.data ?? []).filter(
+        (s) =>
+          matches(search, s.database_name, s.storage_name, s.cron_expression) &&
+          (databaseId === ALL || s.database_id === databaseId) &&
+          (enabled === ALL || (enabled === "enabled") === s.enabled),
+      ),
+    [schedules.data, search, databaseId, enabled],
+  )
+  const paging = usePaging(rows, JSON.stringify({ search, databaseId, enabled }))
   const noDatabases = databases.data?.length === 0
   const noStorage = storage.data?.length === 0
 
@@ -68,6 +78,37 @@ export function SchedulesView() {
           )
         }
       />
+      {!schedules.isPending && (schedules.data?.length ?? 0) > 0 && (
+        <TableToolbar>
+          <TableSearch value={search} onChange={setSearch} placeholder="Search database, storage…" />
+          <FilterSelect
+            value={databaseId}
+            onChange={setDatabaseId}
+            label="Filter by database"
+            allLabel="All databases"
+            className="w-48"
+            options={(databases.data ?? []).map((d) => ({ value: d.id, label: d.name }))}
+          />
+          <FilterSelect
+            value={enabled}
+            onChange={setEnabled}
+            label="Filter by state"
+            allLabel="Any state"
+            options={[
+              { value: "enabled", label: "Enabled" },
+              { value: "paused", label: "Paused" },
+            ]}
+          />
+          <ClearFiltersButton
+            show={scheduleFilters}
+            onClear={() => {
+              setSearch("")
+              setDatabaseId(ALL)
+              setEnabled(ALL)
+            }}
+          />
+        </TableToolbar>
+      )}
       {schedules.error && <ErrorState error={schedules.error} retry={() => schedules.refetch()} />}
       {schedules.isPending ? (
         <TableSkeleton rows={4} columns={6} />
@@ -93,6 +134,8 @@ export function SchedulesView() {
             </Button>
           }
         />
+      ) : rows.length === 0 && scheduleFilters ? (
+        <EmptyState icon={CalendarClock} title="No schedules match these filters" description="Try a different database, state or search." />
       ) : schedules.data?.length === 0 ? (
         <EmptyState
           icon={CalendarClock}
@@ -107,33 +150,30 @@ export function SchedulesView() {
           }
         />
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-4">Database</TableHead>
-                <TableHead>Frequency</TableHead>
-                <TableHead>Next run</TableHead>
-                <TableHead className="hidden md:table-cell">Last run</TableHead>
-                <TableHead className="hidden lg:table-cell">Storage</TableHead>
-                <TableHead className="hidden lg:table-cell">Retention</TableHead>
-                <TableHead className="hidden xl:table-cell">Options</TableHead>
-                <TableHead>Enabled</TableHead>
-                <TableHead className="w-10 pr-4" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {schedules.data?.map((s) => (
-                <ScheduleRow
-                  key={s.id}
-                  s={s}
-                  onEdit={() => setEditing(s)}
-                  onRetention={() => setRetention(s)}
-                  onDelete={() => setDeleting(s)}
-                />
-              ))}
-            </TableBody>
-          </Table>
+        <div className="space-y-3">
+          <div className="overflow-hidden rounded-xl border bg-card">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="pl-4">Database</TableHead>
+                  <TableHead>Frequency</TableHead>
+                  <TableHead>Next run</TableHead>
+                  <TableHead className="hidden md:table-cell">Last run</TableHead>
+                  <TableHead className="hidden lg:table-cell">Storage</TableHead>
+                  <TableHead className="hidden lg:table-cell">Retention</TableHead>
+                  <TableHead className="hidden xl:table-cell">Options</TableHead>
+                  <TableHead>Enabled</TableHead>
+                  <TableHead className="w-10 pr-4" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paging.rows.map((s) => (
+                  <ScheduleRow key={s.id} s={s} onEdit={() => setEditing(s)} onRetention={() => setRetention(s)} onDelete={() => setDeleting(s)} />
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <TablePagination {...paging.props} noun="schedules" />
         </div>
       )}
       <ScheduleDialog open={creating} onOpenChange={closeCreate} initialDatabaseId={params.get("database") ?? undefined} />
