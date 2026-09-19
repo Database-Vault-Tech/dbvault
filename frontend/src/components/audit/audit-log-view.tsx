@@ -2,17 +2,15 @@
 
 import { ChevronRight, ScrollText } from "lucide-react"
 import Link from "next/link"
-import { Fragment, useState } from "react"
+import { Fragment, useMemo, useState } from "react"
 
+import { ALL, ClearFiltersButton, FilterSelect, matches, TablePagination, TableSearch, TableToolbar, useSearchPaging } from "@/components/app/data-table"
 import { EmptyState } from "@/components/app/empty-state"
 import { ErrorState } from "@/components/app/error-state"
 import { PageHeader } from "@/components/app/page-header"
 import { RelativeTime } from "@/components/app/relative-time"
 import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Spinner } from "@/components/ui/spinner"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { humanizeAction, shortId } from "@/lib/format"
 import { useAuditLogs } from "@/lib/queries"
@@ -20,7 +18,6 @@ import type { AuditLog } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const CATEGORIES = [
-  { value: "all", label: "All activity" },
   { value: "user.", label: "Authentication" },
   { value: "database.", label: "Databases" },
   { value: "backup.", label: "Backups" },
@@ -38,39 +35,61 @@ function resourceHref(l: AuditLog): string | undefined {
   return undefined
 }
 
+const RESOURCE_TYPES = ["database", "backup", "restore", "schedule", "storage_destination", "notification", "user", "api_token"]
+
 export function AuditLogView() {
-  const [category, setCategory] = useState("all")
+  const [category, setCategory] = useState(ALL)
+  const [resourceType, setResourceType] = useState(ALL)
+  const [search, setSearch] = useState("")
   const [open, setOpen] = useState<string | null>(null)
-  const logs = useAuditLogs({ action: category === "all" ? undefined : category, limit: 50 })
-  const rows = logs.data?.pages.flatMap((p) => p.data) ?? []
+  const filters = {
+    action: category === ALL ? undefined : category,
+    resource_type: resourceType === ALL ? undefined : resourceType,
+    limit: 50,
+  }
+  const logs = useAuditLogs(filters)
+  const filtered = category !== ALL || resourceType !== ALL || search.trim() !== ""
+  // The search runs over the rows already fetched (actor, action, resource).
+  const searched = useMemo(() => {
+    const all = logs.data?.pages.flatMap((p) => p.data) ?? []
+    return all.filter((l) => matches(search, l.actor_email, l.action, humanizeAction(l.action), l.resource_type, l.resource_id, l.ip_address))
+  }, [logs.data, search])
+  const paging = useSearchPaging(searched, logs, JSON.stringify({ filters, search }))
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Audit log"
-        description="An append-only record of security-relevant actions in this organization. Secrets are never recorded."
-        actions={
-          <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger className="w-48" aria-label="Filter by category">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CATEGORIES.map((c) => (
-                <SelectItem key={c.value} value={c.value}>
-                  {c.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        }
-      />
+      <PageHeader title="Audit log" description="An append-only record of security-relevant actions in this organization. Secrets are never recorded." />
+      <TableToolbar>
+        <TableSearch value={search} onChange={setSearch} placeholder="Search actor, action, resource…" />
+        <FilterSelect value={category} onChange={setCategory} label="Filter by category" allLabel="All activity" className="w-48" options={CATEGORIES} />
+        <FilterSelect
+          value={resourceType}
+          onChange={setResourceType}
+          label="Filter by resource type"
+          allLabel="All resources"
+          className="w-44"
+          options={RESOURCE_TYPES.map((t) => ({ value: t, label: t.replace(/_/g, " ") }))}
+        />
+        <ClearFiltersButton
+          show={filtered}
+          onClear={() => {
+            setCategory(ALL)
+            setResourceType(ALL)
+            setSearch("")
+          }}
+        />
+      </TableToolbar>
       {logs.error && <ErrorState error={logs.error} retry={() => logs.refetch()} />}
       {logs.isPending ? (
         <TableSkeleton rows={8} columns={5} />
-      ) : rows.length === 0 ? (
-        <EmptyState icon={ScrollText} title="No audit events" description={category === "all" ? "Actions like creating databases and running backups appear here." : "No events in this category yet."} />
+      ) : paging.props.total === 0 ? (
+        <EmptyState
+          icon={ScrollText}
+          title={filtered ? "No audit events match these filters" : "No audit events"}
+          description={filtered ? "Try a different category, resource or search." : "Actions like creating databases and running backups appear here."}
+        />
       ) : (
-        <>
+        <div className="space-y-3">
           <div className="overflow-hidden rounded-xl border bg-card">
             <Table>
               <TableHeader>
@@ -84,7 +103,7 @@ export function AuditLogView() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((l) => {
+                {paging.rows.map((l) => {
                   const href = resourceHref(l)
                   const expanded = open === l.id
                   const hasMeta = Object.keys(l.metadata ?? {}).length > 0
@@ -142,14 +161,8 @@ export function AuditLogView() {
               </TableBody>
             </Table>
           </div>
-          {logs.hasNextPage && (
-            <div className="flex justify-center">
-              <Button variant="outline" onClick={() => logs.fetchNextPage()} disabled={logs.isFetchingNextPage}>
-                {logs.isFetchingNextPage && <Spinner />} Load more
-              </Button>
-            </div>
-          )}
-        </>
+          <TablePagination {...paging.props} noun="events" />
+        </div>
       )}
     </div>
   )
