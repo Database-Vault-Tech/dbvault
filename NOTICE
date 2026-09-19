@@ -1,0 +1,9 @@
+DBVault
+Copyright 2026 The DBVault Authors
+
+This product includes software developed by third parties, including:
+- age (filippo.io/age), BSD-3-Clause
+- pgx (github.com/jackc/pgx), MIT
+- klauspost/compress, BSD-3-Clause / Apache-2.0
+- AWS SDK for Go v2, Apache-2.0
+- Next.js, React, Radix UI, shadcn/ui, lucide, TanStack Query — MIT / ISC
