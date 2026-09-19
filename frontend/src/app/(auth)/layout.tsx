@@ -1,7 +1,11 @@
+import type { Metadata } from "next"
 import Link from "next/link"
 
 import { ThemeToggle } from "@/components/app/theme-toggle"
 import { Logo } from "@/components/brand/logo"
+
+// Sign-in pages have no search value and must not be indexed.
+export const metadata: Metadata = { robots: { index: false, follow: false } }
 
 const LOG = [
   ["12:30:01", "Connecting to PostgreSQL"],
@@ -27,17 +31,13 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="flex flex-1 items-center justify-center py-12">
           <div className="w-full max-w-sm">{children}</div>
         </div>
-        <p className="text-center text-xs text-muted-foreground">
-          Open-source SQL database backups. Your database, your backups, your infrastructure.
-        </p>
+        <p className="text-center text-xs text-muted-foreground">Open-source SQL database backups. Your database, your backups, your infrastructure.</p>
       </div>
       <aside className="relative hidden overflow-hidden border-l bg-muted/40 text-foreground lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div className="absolute inset-0 bg-grid mask-radial opacity-60" aria-hidden />
         <div className="relative space-y-4">
           <p className="text-sm font-medium text-brand">Restore-tested backups</p>
-          <h2 className="max-w-md text-3xl font-semibold tracking-tight text-balance">
-            A backup you haven&apos;t restored is just a hope.
-          </h2>
+          <h2 className="max-w-md text-3xl font-semibold tracking-tight text-balance">A backup you haven&apos;t restored is just a hope.</h2>
           <p className="max-w-md text-muted-foreground">
             DBVault encrypts every dump, verifies its checksum, and can prove it restores in a disposable sandbox database.
           </p>
