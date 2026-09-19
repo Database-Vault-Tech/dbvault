@@ -47,10 +47,10 @@ const ROWS: Row[] = [
 ]
 
 const STATUS_CLASS: Record<Row["status"], { pill: string; dot: string }> = {
-  Completed: { pill: "bg-success/10 text-success ring-success/25", dot: "bg-success" },
-  Verified: { pill: "bg-success/10 text-success ring-success/25", dot: "bg-success" },
-  Running: { pill: "bg-info/10 text-info ring-info/25", dot: "bg-info animate-pulse-dot" },
-  Failed: { pill: "bg-destructive/10 text-destructive ring-destructive/25", dot: "bg-destructive" },
+  Completed: { pill: "bg-success/15 text-success", dot: "bg-success" },
+  Verified: { pill: "bg-success/15 text-success", dot: "bg-success" },
+  Running: { pill: "bg-info/15 text-info", dot: "bg-info animate-pulse-dot" },
+  Failed: { pill: "bg-destructive/15 text-destructive", dot: "bg-destructive" },
 }
 
 const BARS = [6, 7, 7, 8, 6, 9, 8, 7, 10, 9, 8, 11, 9, 12]
@@ -159,8 +159,8 @@ export function DashboardPreview() {
                         <tr key={r.db} className="border-b last:border-0">
                           <td className="px-3 py-2.5 font-medium">{r.db}</td>
                           <td className="px-3 py-2.5">
-                            <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset", STATUS_CLASS[r.status].pill)}>
-                              <span className={cn("size-1.5 rounded-full", STATUS_CLASS[r.status].dot)} />
+                            <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_CLASS[r.status].pill)}>
+                              {r.status === "Running" && <span className={cn("size-1.5 rounded-full", STATUS_CLASS[r.status].dot)} />}
                               {r.status}
                             </span>
                           </td>

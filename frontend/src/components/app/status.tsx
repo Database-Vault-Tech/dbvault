@@ -33,13 +33,14 @@ const LABELS: Record<string, string> = {
   unavailable: "Unavailable",
 }
 
+// Flat tinted pills, matching the landing page's "Available" / "Coming soon" chips.
 const TONE_CLASSES: Record<Tone, { badge: string; dot: string }> = {
-  success: { badge: "bg-success/10 text-success ring-success/25", dot: "bg-success" },
-  warning: { badge: "bg-warning/12 text-warning ring-warning/30", dot: "bg-warning" },
-  error: { badge: "bg-destructive/10 text-destructive ring-destructive/25", dot: "bg-destructive" },
-  running: { badge: "bg-info/10 text-info ring-info/25", dot: "bg-info animate-pulse-dot" },
-  queued: { badge: "bg-muted text-muted-foreground ring-foreground/10", dot: "bg-muted-foreground/70" },
-  neutral: { badge: "bg-muted text-muted-foreground ring-foreground/10", dot: "bg-muted-foreground/50" },
+  success: { badge: "bg-success/15 text-success", dot: "bg-success" },
+  warning: { badge: "bg-warning/15 text-warning", dot: "bg-warning" },
+  error: { badge: "bg-destructive/15 text-destructive", dot: "bg-destructive" },
+  running: { badge: "bg-info/15 text-info", dot: "bg-info animate-pulse-dot" },
+  queued: { badge: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/70" },
+  neutral: { badge: "bg-muted text-muted-foreground", dot: "bg-muted-foreground/50" },
 }
 
 export function toneFor(status: string | null | undefined): Tone {
@@ -66,14 +67,9 @@ export function StatusBadge({
   const t = tone ?? toneFor(status)
   const text = label ?? (status ? (LABELS[status] ?? status.charAt(0).toUpperCase() + status.slice(1)) : "—")
   return (
-    <span
-      className={cn(
-        "inline-flex h-5.5 items-center gap-1.5 rounded-full px-2 text-xs font-medium whitespace-nowrap ring-1 ring-inset",
-        TONE_CLASSES[t].badge,
-        className,
-      )}
-    >
-      <StatusDot tone={t} />
+    <span className={cn("inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", TONE_CLASSES[t].badge, className)}>
+      {/* Only live states get a (pulsing) dot, so "running" stands out. */}
+      {t === "running" && <StatusDot tone={t} />}
       {text}
     </span>
   )

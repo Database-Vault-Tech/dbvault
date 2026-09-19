@@ -100,7 +100,7 @@ export function DatabasesView() {
                       <span className="max-w-64 truncate font-mono">
                         {db.host}:{db.port}/{db.database}
                       </span>
-                      <span className="shrink-0 rounded border px-1 font-mono text-[10.5px]">
+                      <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] text-muted-foreground">
                         {engineMeta(db.engine).shortLabel}
                         {db.pg_version && ` ${db.pg_version}`}
                       </span>
