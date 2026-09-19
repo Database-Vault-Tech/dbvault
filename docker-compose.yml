@@ -237,10 +237,13 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        SITE_URL: ${SITE_URL:-https://dbvault.tech}
     image: dbvault/frontend:${DBVAULT_VERSION:-dev}
     restart: unless-stopped
     environment:
       API_URL: http://api:8080
+      SITE_URL: ${SITE_URL:-https://dbvault.tech}
     ports:
       - "${APP_PORT:-3000}:3000"
     depends_on:
