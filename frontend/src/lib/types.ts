@@ -351,6 +351,7 @@ export interface RestoreJob {
   source_database_name: string
   target_database_id: string
   target_database_name: string
+  engine?: DatabaseEngine
   mode: "existing" | "new"
   new_database_name: string | null
   status: RestoreStatus

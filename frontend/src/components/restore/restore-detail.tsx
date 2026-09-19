@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { errorMessage } from "@/lib/api"
+import { engineMeta } from "@/lib/engines"
 import { formatDateTime, formatDuration, formatNumber } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useCancelJob, useRestore } from "@/lib/queries"
@@ -21,7 +22,7 @@ import { cn } from "@/lib/utils"
 
 const STEPS: { key: RestoreStatus; label: string; hint: string }[] = [
   { key: "queued", label: "Queued", hint: "Waiting for a worker" },
-  { key: "running", label: "Restoring", hint: "Download, verify, pg_restore" },
+  { key: "running", label: "Restoring", hint: "Download, verify, restore" },
   { key: "verifying", label: "Verifying", hint: "Checking restored tables" },
   { key: "completed", label: "Completed", hint: "Ready to use" },
 ]
@@ -170,7 +171,11 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
               {r.error && (
                 <Alert variant="destructive">
                   <AlertTriangle />
-                  <AlertTitle>Restore failed — the target database was left unchanged</AlertTitle>
+                  <AlertTitle>
+                    {engineMeta(r.engine).atomicRestore || r.mode === "new"
+                      ? "Restore failed — the target database was left unchanged"
+                      : "Restore failed — the target database may be partially restored"}
+                  </AlertTitle>
                   <AlertDescription className="font-mono text-xs break-words">{r.error}</AlertDescription>
                 </Alert>
               )}
@@ -195,7 +200,13 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
                     <Endpoint
                       label={r.mode === "new" ? "Into new database" : "Over existing database"}
                       title={r.mode === "new" ? (r.new_database_name ?? "—") : r.target_database_name}
-                      detail={r.mode === "new" ? `on ${r.target_database_name}'s server` : "objects replaced in one transaction"}
+                      detail={
+                        r.mode === "new"
+                          ? `on ${r.target_database_name}'s server`
+                          : engineMeta(r.engine).atomicRestore
+                            ? "objects replaced in one transaction"
+                            : "objects dropped and recreated"
+                      }
                       tone={r.mode === "new" ? "brand" : "danger"}
                     />
                   </div>

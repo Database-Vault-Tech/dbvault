@@ -56,6 +56,7 @@ type Job struct {
 	SourceDatabaseName string          `json:"source_database_name"`
 	TargetDatabaseID   string          `json:"target_database_id"`
 	TargetDatabaseName string          `json:"target_database_name"`
+	Engine             string          `json:"engine"`
 	Mode               string          `json:"mode"`
 	NewDatabaseName    *string         `json:"new_database_name"`
 	Status             string          `json:"status"`
@@ -70,7 +71,7 @@ type Job struct {
 	organizationID     string
 }
 
-const selectRestore = `SELECT r.id, r.organization_id, r.job_id, r.backup_id, b.created_at, sd.name, r.target_database_id, td.name, r.mode,
+const selectRestore = `SELECT r.id, r.organization_id, r.job_id, r.backup_id, b.created_at, sd.name, r.target_database_id, td.name, td.engine, r.mode,
 	r.new_database_name, r.status, r.error, r.verification, r.started_at, r.completed_at, r.duration_ms, r.requested_by, u.email, r.created_at
 	FROM restore_jobs r
 	JOIN backups b ON b.id = r.backup_id
@@ -81,7 +82,7 @@ const selectRestore = `SELECT r.id, r.organization_id, r.job_id, r.backup_id, b.
 func scanRestore(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.organizationID, &j.JobID, &j.BackupID, &j.BackupCreatedAt, &j.SourceDatabaseName, &j.TargetDatabaseID, &j.TargetDatabaseName,
-		&j.Mode, &j.NewDatabaseName, &j.Status, &j.Error, &j.Verification, &j.StartedAt, &j.CompletedAt, &j.DurationMs, &j.RequestedBy,
+		&j.Engine, &j.Mode, &j.NewDatabaseName, &j.Status, &j.Error, &j.Verification, &j.StartedAt, &j.CompletedAt, &j.DurationMs, &j.RequestedBy,
 		&j.RequestedByEmail, &j.CreatedAt)
 	return j, err
 }
