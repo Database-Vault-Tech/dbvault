@@ -61,7 +61,7 @@ Checksum: 9f2c4e1a…
 Requirements: Docker with Compose v2.
 
 ```bash
-git clone https://github.com/dbvault/dbvault && cd dbvault
+git clone https://github.com/Database-Vault-Tech/dbvault && cd dbvault
 cp .env.example .env          # or ./scripts/setup.sh to generate strong secrets (recommended)
 docker compose up -d
 ```

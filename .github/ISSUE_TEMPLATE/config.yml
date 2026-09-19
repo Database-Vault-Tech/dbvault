@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/dbvault/dbvault/security/advisories/new
+    url: https://github.com/Database-Vault-Tech/dbvault/security/advisories/new
     about: Report vulnerabilities privately.
   - name: Questions & discussion
-    url: https://github.com/dbvault/dbvault/discussions
+    url: https://github.com/Database-Vault-Tech/dbvault/discussions
     about: Ask questions and share ideas.

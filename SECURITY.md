@@ -11,7 +11,7 @@ should track the latest release.
 ## Reporting a vulnerability
 
 **Please do not open a public issue.** Instead, use GitHub's
-[private vulnerability reporting](https://github.com/dbvault/dbvault/security/advisories/new)
+[private vulnerability reporting](https://github.com/Database-Vault-Tech/dbvault/security/advisories/new)
 or email **security@dbvault.dev**.
 
 Include:
