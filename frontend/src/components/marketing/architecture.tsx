@@ -4,8 +4,8 @@ import { Fragment } from "react"
 import { Section, SectionHeading } from "./primitives"
 
 const STAGES = [
-  { name: "Your database", detail: "PostgreSQL · more soon" },
-  { name: "Native dump", detail: "e.g. pg_dump" },
+  { name: "Your database", detail: "PostgreSQL · MySQL · MariaDB" },
+  { name: "Native dump", detail: "pg_dump · mariadb-dump" },
   { name: "Compression", detail: "zstd / gzip" },
   { name: "Encryption", detail: "age X25519" },
   { name: "Checksum", detail: "SHA-256" },

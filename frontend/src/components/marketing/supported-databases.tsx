@@ -8,8 +8,13 @@ import { Section, SectionHeading } from "./primitives"
 // up and restore it end to end.
 const ENGINES = [
   { name: "PostgreSQL", tool: "pg_dump · pg_restore", detail: "Versions 9.2 – 18, every SSL mode, restore-tested in a sandbox.", available: true },
-  { name: "MySQL", tool: "mysqldump", detail: "Logical backups with the official client tools.", available: false },
-  { name: "MariaDB", tool: "mariadb-dump", detail: "Native dump and restore for MariaDB servers.", available: false },
+  {
+    name: "MySQL",
+    tool: "mariadb-dump · mariadb",
+    detail: "MySQL 5.7 – 9, consistent InnoDB snapshots with routines, triggers and events, restore-tested in a sandbox.",
+    available: true,
+  },
+  { name: "MariaDB", tool: "mariadb-dump · mariadb", detail: "MariaDB 10 and 11, native dump and restore, restore-tested in a sandbox.", available: true },
   { name: "SQL Server", tool: "sqlpackage / BACKUP", detail: "Native backups for Microsoft SQL Server.", available: false },
   { name: "SQLite", tool: "sqlite3 .backup", detail: "Consistent online backups of SQLite files.", available: false },
 ]
@@ -22,7 +27,7 @@ export function SupportedDatabases() {
           id="databases-title"
           eyebrow="Supported databases"
           title="One vault for every SQL database."
-          description="DBVault drives each engine's own battle-tested dump tooling through the same pipeline: compression, encryption, checksums, storage, retention and restore tests. PostgreSQL is fully supported today; more engines are on the way."
+          description="DBVault drives each engine's own battle-tested dump tooling through the same pipeline: compression, encryption, checksums, storage, retention and restore tests. PostgreSQL, MySQL and MariaDB are fully supported today; SQL Server and SQLite are on the way."
         />
         <ul className="grid gap-3 sm:grid-cols-2">
           {ENGINES.map((e) => (
