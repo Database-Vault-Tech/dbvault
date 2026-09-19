@@ -9,4 +9,5 @@ export const NAV_LINKS = [
   { label: "Security", href: "#security" },
   { label: "Open source", href: "#open-source" },
   { label: "Pricing", href: "#pricing" },
+  { label: "FAQ", href: "#faq" },
 ]
