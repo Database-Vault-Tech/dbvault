@@ -145,6 +145,7 @@ type Database struct {
 	Database         string     `json:"database"`
 	Username         string     `json:"username"`
 	SSLMode          string     `json:"ssl_mode"`
+	Engine           string     `json:"engine"`
 	PGVersion        *string    `json:"pg_version"`
 	Protected        bool       `json:"protected"`
 	LastBackupAt     *time.Time `json:"last_backup_at"`

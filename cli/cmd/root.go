@@ -29,12 +29,12 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "dbvault",
-	Short: "Open-source PostgreSQL backups that just work",
-	Long: `dbvault manages PostgreSQL backups on a DBVault server.
+	Short: "Open-source SQL database backups that just work",
+	Long: `dbvault manages PostgreSQL, MySQL and MariaDB backups on a DBVault server.
 
 Get started:
   dbvault init                 connect this CLI to your DBVault server
-  dbvault database add         register a PostgreSQL database
+  dbvault database add         register a PostgreSQL, MySQL or MariaDB database
   dbvault backup production    back up the "production" database now`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
@@ -118,6 +118,19 @@ func deref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// engineLabel returns e.g. "MySQL" ("" means PostgreSQL, for older servers).
+func engineLabel(engine string) string {
+	if e, ok := engines[engine]; ok {
+		return e.label
+	}
+	return "PostgreSQL"
+}
+
+// engineVersion renders e.g. "PostgreSQL 17" or "MySQL 8".
+func engineVersion(engine string, v *string) string {
+	return engineLabel(engine) + " " + pgMajor(v)
 }
 
 func pgMajor(v *string) string {

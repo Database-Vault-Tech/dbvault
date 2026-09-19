@@ -84,7 +84,7 @@ Subcommands:
 		}
 		if !flagJSON {
 			fmt.Println("Database:   ", d.Name)
-			fmt.Println("PostgreSQL: ", pgMajor(d.PGVersion))
+			fmt.Println("Server:     ", engineVersion(d.Engine, d.PGVersion))
 			fmt.Println("Destination:", detail.Backup.StorageName, ui.Dim("("+strings.ToUpper(detail.Backup.StorageType)+")"))
 			fmt.Println()
 		}
