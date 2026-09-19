@@ -1,6 +1,6 @@
 "use client"
 
-import { History, Info } from "lucide-react"
+import { History, Info, RotateCcw } from "lucide-react"
 import { useSearchParams } from "next/navigation"
 import { useState } from "react"
 
@@ -11,25 +11,47 @@ import { RelativeTime } from "@/components/app/relative-time"
 import { StatusBadge } from "@/components/app/status"
 import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDateTime, formatDuration } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useRestores } from "@/lib/queries"
 
 import { RestoreDetailDialog } from "./restore-detail"
-import { RestoreWizard } from "./restore-wizard"
+import { RestoreWizardDialog } from "./restore-wizard"
 
 export function RestoreView() {
   const { can } = useOrg()
   const params = useSearchParams()
   const { data, isPending, error, refetch } = useRestores()
   const [selected, setSelected] = useState<string | null>(null)
+  const presetBackup = params.get("backup") ?? undefined
+  // Arriving from a backup's "Restore" action opens the form right away.
+  const [wizardOpen, setWizardOpen] = useState(!!presetBackup)
+  const canRestore = can("admin")
+  const newRestore = (
+    <Button onClick={() => setWizardOpen(true)}>
+      <RotateCcw /> New restore
+    </Button>
+  )
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Restore" description="Restore any completed backup into a new database or over an existing one. Every restore is tracked and audited." />
-      {can("admin") ? (
-        <RestoreWizard initialBackupId={params.get("backup") ?? undefined} onCreated={setSelected} />
+      <PageHeader
+        title="Restore"
+        description="Restore any completed backup into a new database or over an existing one. Every restore is tracked and audited."
+        actions={canRestore ? newRestore : undefined}
+      />
+      {canRestore ? (
+        <RestoreWizardDialog
+          open={wizardOpen}
+          onOpenChange={setWizardOpen}
+          initialBackupId={presetBackup}
+          onCreated={(id) => {
+            setWizardOpen(false)
+            setSelected(id)
+          }}
+        />
       ) : (
         <Alert>
           <Info />
@@ -49,6 +71,7 @@ export function RestoreView() {
             icon={History}
             title="No restores yet"
             description="When you restore a backup, its progress, verification and logs appear here. Tip: restore into a new database regularly to rehearse disaster recovery."
+            action={canRestore ? newRestore : undefined}
           />
         ) : (
           <div className="overflow-hidden rounded-xl border bg-card">

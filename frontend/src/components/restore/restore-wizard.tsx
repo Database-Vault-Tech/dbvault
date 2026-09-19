@@ -8,7 +8,7 @@ import { ConfirmDialog } from "@/components/app/confirm-dialog"
 import { StatusBadge } from "@/components/app/status"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -44,7 +44,39 @@ function Step({ n, title, children, disabled }: { n: number; title: string; chil
   )
 }
 
-export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?: string; onCreated: (id: string) => void }) {
+/**
+ * The restore form, in a dialog the same size as the restore progress
+ * dialog it hands over to.
+ */
+export function RestoreWizardDialog({
+  open,
+  onOpenChange,
+  initialBackupId,
+  onCreated,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initialBackupId?: string
+  onCreated: (id: string) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+        <RestoreWizard initialBackupId={initialBackupId} onCreated={onCreated} onCancel={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function RestoreWizard({
+  initialBackupId,
+  onCreated,
+  onCancel,
+}: {
+  initialBackupId?: string
+  onCreated: (id: string) => void
+  onCancel: () => void
+}) {
   const { data: databases } = useDatabases()
   const preset = useBackup(initialBackupId ?? "")
   const [sourceId, setSourceId] = useState("")
@@ -108,14 +140,19 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
     )
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <RotateCcw className="size-4 text-muted-foreground" /> New restore
-        </CardTitle>
-        <CardDescription>The backup is downloaded, its checksum verified, then decrypted and restored with pg_restore.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
+    <>
+      <div className="flex items-start gap-3 border-b px-6 py-5 pr-12">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand/10 text-brand">
+          <RotateCcw className="size-5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <DialogTitle className="text-lg">New restore</DialogTitle>
+          <DialogDescription className="mt-0.5">
+            The backup is downloaded, its checksum verified, then decrypted and restored with {engine.restoreTool}.
+          </DialogDescription>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
         <Step n={1} title="Source database">
           <Select value={sourceId} onValueChange={selectSource}>
             <SelectTrigger className="w-full sm:w-80" aria-label="Source database">
@@ -244,12 +281,15 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
           )}
         </Step>
 
-        <div className="flex justify-end border-t pt-4">
-          <Button variant={mode === "existing" ? "destructive" : "default"} disabled={!ready || create.isPending} onClick={() => setConfirming(true)}>
-            <RotateCcw /> Review and restore
-          </Button>
-        </div>
-      </CardContent>
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 border-t bg-muted/30 px-6 py-4">
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant={mode === "existing" ? "destructive" : "default"} disabled={!ready || create.isPending} onClick={() => setConfirming(true)}>
+          <RotateCcw /> Review and restore
+        </Button>
+      </div>
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
@@ -305,7 +345,7 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
           </ul>
         </div>
       </ConfirmDialog>
-    </Card>
+    </>
   )
 }
 
