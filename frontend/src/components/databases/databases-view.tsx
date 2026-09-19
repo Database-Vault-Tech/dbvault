@@ -13,6 +13,7 @@ import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { engineMeta } from "@/lib/engines"
 import { formatBytes } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useDatabases } from "@/lib/queries"
@@ -44,7 +45,7 @@ export function DatabasesView() {
     <div>
       <PageHeader
         title="Databases"
-        description="PostgreSQL databases DBVault protects. Credentials are encrypted at rest and never returned by the API."
+        description="PostgreSQL, MySQL and MariaDB databases DBVault protects. Credentials are encrypted at rest and never returned by the API."
         actions={
           can("admin") && (
             <Button asChild>
@@ -63,7 +64,7 @@ export function DatabasesView() {
         <EmptyState
           icon={DatabaseIcon}
           title="No databases yet."
-          description="Connect your first PostgreSQL database and DBVault will start protecting it."
+          description="Connect your first PostgreSQL, MySQL or MariaDB database and DBVault will start protecting it."
           action={
             can("admin") && (
               <Button asChild>
@@ -99,7 +100,10 @@ export function DatabasesView() {
                       <span className="max-w-64 truncate font-mono">
                         {db.host}:{db.port}/{db.database}
                       </span>
-                      {db.pg_version && <span className="shrink-0 rounded border px-1 font-mono text-[10.5px]">PG {db.pg_version}</span>}
+                      <span className="shrink-0 rounded border px-1 font-mono text-[10.5px]">
+                        {engineMeta(db.engine).shortLabel}
+                        {db.pg_version && ` ${db.pg_version}`}
+                      </span>
                     </div>
                   </TableCell>
                   <TableCell>

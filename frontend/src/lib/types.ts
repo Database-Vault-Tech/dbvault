@@ -90,6 +90,7 @@ export interface DatabaseHealth {
 }
 
 export interface DatabaseInput {
+  engine?: DatabaseEngine
   name: string
   host: string
   port: number
@@ -514,7 +515,15 @@ export interface WorkerPresence {
     verify_mode?: string
     verify_available?: boolean
     verify_detail?: string
+    engines?: Record<string, WorkerEngineCapability>
   }
+}
+
+export interface WorkerEngineCapability {
+  label: string
+  tools_available: boolean
+  verify_available: boolean
+  verify_detail?: string
 }
 
 export interface SystemStatus {

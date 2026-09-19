@@ -16,18 +16,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { errorMessage } from "@/lib/api"
+import { engineLabel } from "@/lib/engines"
 import { useOrg } from "@/lib/org"
 import { useCreateBackup, useDeleteDatabase, useTestSavedDatabase } from "@/lib/queries"
 import type { Database } from "@/lib/types"
 
 export function useTestDatabaseToast() {
   const test = useTestSavedDatabase()
-  const run = (db: Pick<Database, "id" | "name">) => {
+  const run = (db: Pick<Database, "id" | "name" | "engine">) => {
     const id = toast.loading(`Testing connection to ${db.name}…`)
     test.mutate(db.id, {
       onSuccess: (r) =>
         r.ok
-          ? toast.success("Connection successful", { id, description: r.server ? `PostgreSQL ${r.server.version} · ${r.server.latency_ms} ms` : undefined })
+          ? toast.success("Connection successful", { id, description: r.server ? `${engineLabel(db.engine)} ${r.server.version} · ${r.server.latency_ms} ms` : undefined })
           : toast.error("Connection failed", { id, description: r.message }),
       onError: (err) => toast.error("Connection test failed", { id, description: errorMessage(err) }),
     })
@@ -57,7 +58,7 @@ export function DeleteDatabaseDialog({
       pending={del.isPending}
       description={
         <>
-          <p>DBVault will stop backing up this database and remove its schedules. Nothing in the PostgreSQL server itself is touched.</p>
+          <p>DBVault will stop backing up this database and remove its schedules. Nothing in the database server itself is touched.</p>
           <p>Existing backups are kept: they stay listed, downloadable and restorable until you delete them.</p>
         </>
       }

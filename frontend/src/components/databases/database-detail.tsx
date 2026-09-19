@@ -21,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { engineMeta } from "@/lib/engines"
 import { formatBytes, formatPercent } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useBackups, useDatabase, useSchedules, useUpdateDatabase } from "@/lib/queries"
@@ -52,7 +53,7 @@ function EditDialog({ db, open, onOpenChange }: { db: Database; open: boolean; o
           databaseId={db.id}
           submitLabel="Save changes"
           onCancel={() => onOpenChange(false)}
-          defaultValues={{ name: db.name, host: db.host, port: db.port, database: db.database, username: db.username, ssl_mode: db.ssl_mode, password: "" }}
+          defaultValues={{ engine: engineMeta(db.engine).id, name: db.name, host: db.host, port: db.port, database: db.database, username: db.username, ssl_mode: db.ssl_mode, password: "" }}
           onSubmit={async (input) => {
             await update.mutateAsync(input)
             toast.success("Database updated")
@@ -197,7 +198,10 @@ export function DatabaseDetail({ id }: { id: string }) {
               <span className="font-mono text-xs">
                 {db.host}:{db.port}/{db.database}
               </span>
-              {db.pg_version && <span>PostgreSQL {db.pg_version}</span>}
+              <span>
+                {engineMeta(db.engine).label}
+                {db.pg_version && ` ${db.pg_version}`}
+              </span>
               {db.size_bytes !== null && <span>{formatBytes(db.size_bytes)}</span>}
               <span className="text-muted-foreground">· {health.reason}</span>
             </span>

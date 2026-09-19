@@ -1,8 +1,8 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { CheckCircle2, ClipboardPaste, Lock, PlugZap, XCircle } from "lucide-react"
-import { useState } from "react"
+import { CheckCircle2, ClipboardPaste, Database, Lock, PlugZap, XCircle } from "lucide-react"
+import { useEffect, useState } from "react"
 import { Controller, useForm, useWatch } from "react-hook-form"
 
 import { FormField } from "@/components/app/form-field"
@@ -14,7 +14,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
 import { ApiError, errorMessage } from "@/lib/api"
+import { ENGINE_LIST, ENGINES, engineMeta, type SupportedEngine } from "@/lib/engines"
 import { formatBytes, formatNumber } from "@/lib/format"
+import { cn } from "@/lib/utils"
 import { useTestConnection } from "@/lib/queries"
 import { databaseSchema, parseConnectionString, type DatabaseValues } from "@/lib/schemas"
 import type { ConnectionTest, DatabaseInput, SSLMode } from "@/lib/types"
@@ -28,8 +30,14 @@ const SSL_HELP: Record<SSLMode, string> = {
   "verify-full": "TLS, verify the CA and the hostname. Most secure.",
 }
 
+function sslHelp(engine: SupportedEngine, mode: SSLMode): string {
+  if (engine !== "postgres" && mode === "verify-full") return "TLS, verify the certificate and the hostname. Most secure."
+  return SSL_HELP[mode]
+}
+
 export function toInput(v: DatabaseValues): DatabaseInput {
   return {
+    engine: v.engine,
     name: v.name,
     host: v.host,
     port: Number(v.port),
@@ -41,7 +49,8 @@ export function toInput(v: DatabaseValues): DatabaseInput {
   }
 }
 
-export function ConnectionResult({ result }: { result: ConnectionTest }) {
+export function ConnectionResult({ result, engine = "postgres" }: { result: ConnectionTest; engine?: string }) {
+  const meta = engineMeta(engine)
   if (!result.ok) {
     return (
       <Alert variant="destructive">
@@ -59,14 +68,24 @@ export function ConnectionResult({ result }: { result: ConnectionTest }) {
       {s && (
         <AlertDescription>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm tabular">
-            <span className="font-medium text-foreground">PostgreSQL {s.version}</span>
+            <span className="font-medium text-foreground">
+              {meta.label} {s.version}
+            </span>
             <span>{formatBytes(s.size_bytes)}</span>
             <span>{formatNumber(s.table_count)} tables</span>
             <span>{s.latency_ms} ms</span>
             <span>as {s.current_user}</span>
           </div>
-          {s.is_superuser && <p className="mt-1 text-xs">This user is a superuser. A read-only role with pg_read_all_data is enough for backups.</p>}
-          {s.in_recovery && <p className="mt-1 text-xs">This server is a replica — great for taking backups without loading the primary.</p>}
+          {s.is_superuser && meta.id === "postgres" && (
+            <p className="mt-1 text-xs">This user is a superuser. A read-only role with pg_read_all_data is enough for backups.</p>
+          )}
+          {s.in_recovery && (
+            <p className="mt-1 text-xs">
+              {meta.id === "postgres"
+                ? "This server is a replica — great for taking backups without loading the primary."
+                : "This server is read-only (usually a replica) — great for taking backups without loading the primary."}
+            </p>
+          )}
         </AlertDescription>
       )}
     </Alert>
@@ -80,6 +99,7 @@ export function DatabaseForm({
   submitLabel,
   onSubmit,
   onCancel,
+  onEngineChange,
 }: {
   mode: "create" | "edit"
   databaseId?: string
@@ -87,10 +107,22 @@ export function DatabaseForm({
   submitLabel: string
   onSubmit: (input: DatabaseInput) => Promise<unknown>
   onCancel?: () => void
+  onEngineChange?: (engine: SupportedEngine) => void
 }) {
   const form = useForm<DatabaseValues>({
     resolver: zodResolver(databaseSchema(mode === "create")),
-    defaultValues: { name: "", host: "", port: 5432, database: "postgres", username: "", password: "", ssl_mode: "prefer", ssl_root_cert: "", ...defaultValues },
+    defaultValues: {
+      engine: "postgres",
+      name: "",
+      host: "",
+      port: 5432,
+      database: "postgres",
+      username: "",
+      password: "",
+      ssl_mode: "prefer",
+      ssl_root_cert: "",
+      ...defaultValues,
+    },
   })
   const test = useTestConnection()
   const [result, setResult] = useState<ConnectionTest | null>(null)
@@ -99,6 +131,24 @@ export function DatabaseForm({
   const errors = form.formState.errors
   const sslMode = useWatch({ control: form.control, name: "ssl_mode" })
   const host = useWatch({ control: form.control, name: "host" })
+  const engine = useWatch({ control: form.control, name: "engine" })
+  const meta = ENGINES[engine] ?? ENGINES.postgres
+
+  useEffect(() => {
+    onEngineChange?.(engine)
+  }, [engine, onEngineChange])
+
+  // Switching engines swaps defaults the user hasn't changed.
+  const selectEngine = (next: SupportedEngine) => {
+    const prev = ENGINES[form.getValues("engine")]
+    const to = ENGINES[next]
+    if (prev.id === to.id) return
+    form.setValue("engine", next, { shouldDirty: true })
+    if (Number(form.getValues("port")) === prev.defaultPort || !form.getValues("port")) form.setValue("port", to.defaultPort)
+    if (form.getValues("database") === prev.defaultDatabase) form.setValue("database", to.defaultDatabase)
+    if (!(to.sslModes as readonly string[]).includes(form.getValues("ssl_mode"))) form.setValue("ssl_mode", "prefer")
+    setResult(null)
+  }
 
   const applyFieldErrors = (err: unknown) => {
     if (err instanceof ApiError && Object.keys(err.fields).length) {
@@ -143,7 +193,7 @@ export function DatabaseForm({
             <Input
               id="conn-string"
               className="pl-8 font-mono text-xs"
-              placeholder="postgres://user:password@db.example.com:5432/app?sslmode=require"
+              placeholder={meta.urlExample}
               value={connString}
               onChange={(e) => paste(e.target.value)}
               autoComplete="off"
@@ -152,6 +202,38 @@ export function DatabaseForm({
         </FormField>
       )}
       <FieldGroup>
+        {mode === "create" ? (
+          <FormField id="engine" label="Database type" error={errors.engine}>
+            <div id="engine" role="radiogroup" aria-label="Database type" className="grid gap-2 sm:grid-cols-3">
+              {ENGINE_LIST.map((e) => {
+                const selected = e.id === engine
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => selectEngine(e.id)}
+                    className={cn(
+                      "flex items-center justify-between gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                      selected ? "border-brand bg-brand/5 ring-1 ring-brand" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <Database className={cn("size-4", selected ? "text-brand" : "text-muted-foreground")} aria-hidden />
+                      <span className="font-medium">{e.label}</span>
+                    </span>
+                    <span className="font-mono text-[11px] text-muted-foreground">{e.defaultPort}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </FormField>
+        ) : (
+          <FormField id="engine" label="Database type" description="The database type can't be changed after it's added.">
+            <Input id="engine" value={meta.label} disabled readOnly />
+          </FormField>
+        )}
         <FormField id="name" label="Name" description="How this database appears in DBVault, e.g. production." error={errors.name}>
           <Input id="name" placeholder="production" {...form.register("name")} />
         </FormField>
@@ -189,7 +271,7 @@ export function DatabaseForm({
             />
           </FormField>
         </div>
-        <FormField id="ssl_mode" label="SSL mode" description={SSL_HELP[sslMode]} error={errors.ssl_mode}>
+        <FormField id="ssl_mode" label="SSL mode" description={sslHelp(engine, sslMode)} error={errors.ssl_mode}>
           <Controller
             control={form.control}
             name="ssl_mode"
@@ -199,7 +281,7 @@ export function DatabaseForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(SSL_HELP) as SSLMode[]).map((m) => (
+                  {meta.sslModes.map((m) => (
                     <SelectItem key={m} value={m}>
                       <span className="font-mono">{m}</span>
                     </SelectItem>
@@ -221,7 +303,7 @@ export function DatabaseForm({
         )}
       </FieldGroup>
 
-      {result && <ConnectionResult result={result} />}
+      {result && <ConnectionResult result={result} engine={engine} />}
       {submitError && (
         <Alert variant="destructive">
           <AlertDescription>{submitError}</AlertDescription>

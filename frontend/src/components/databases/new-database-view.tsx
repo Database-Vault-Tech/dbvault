@@ -3,21 +3,52 @@
 import { ArrowLeft, ShieldCheck } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { useState } from "react"
 import { toast } from "sonner"
 
 import { PageHeader } from "@/components/app/page-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { ENGINES, type SupportedEngine } from "@/lib/engines"
 import { useOrg } from "@/lib/org"
 import { useCreateDatabase } from "@/lib/queries"
 
 import { DatabaseForm } from "./database-form"
 
+const GRANTS: Record<SupportedEngine, { intro: string; sql: string; note?: string }> = {
+  postgres: {
+    intro: "Backups only need read access. On PostgreSQL 14+ create a dedicated role:",
+    sql: `CREATE ROLE dbvault LOGIN
+  PASSWORD '…';
+GRANT pg_read_all_data
+  TO dbvault;`,
+  },
+  mysql: {
+    intro: "Backups only need read access to the database. Create a dedicated user:",
+    sql: `CREATE USER 'dbvault'@'%'
+  IDENTIFIED BY '…';
+GRANT SELECT, SHOW VIEW,
+  TRIGGER, EVENT, LOCK TABLES
+  ON app.* TO 'dbvault'@'%';`,
+    note: "To back up stored procedures owned by other users, also grant SHOW_ROUTINE (MySQL 8.0.20+).",
+  },
+  mariadb: {
+    intro: "Backups only need read access to the database. Create a dedicated user:",
+    sql: `CREATE USER 'dbvault'@'%'
+  IDENTIFIED BY '…';
+GRANT SELECT, SHOW VIEW,
+  TRIGGER, EVENT, LOCK TABLES
+  ON app.* TO 'dbvault'@'%';`,
+  },
+}
+
 export function NewDatabaseView() {
   const router = useRouter()
   const { can } = useOrg()
   const create = useCreateDatabase()
+  const [engine, setEngine] = useState<SupportedEngine>("postgres")
+  const grants = GRANTS[engine]
 
   return (
     <div className="mx-auto max-w-5xl">
@@ -26,7 +57,7 @@ export function NewDatabaseView() {
           <ArrowLeft /> Databases
         </Link>
       </Button>
-      <PageHeader title="Add database" description="Connect a PostgreSQL database. Test the connection before saving to catch firewall or credential issues early." />
+      <PageHeader title="Add database" description="Connect a PostgreSQL, MySQL or MariaDB database. Test the connection before saving to catch firewall or credential issues early." />
       {!can("admin") ? (
         <Alert>
           <AlertTitle>Admins only</AlertTitle>
@@ -39,6 +70,7 @@ export function NewDatabaseView() {
               <DatabaseForm
                 mode="create"
                 submitLabel="Save database"
+                onEngineChange={setEngine}
                 onCancel={() => router.push("/databases")}
                 onSubmit={async (input) => {
                   const res = await create.mutateAsync(input)
@@ -55,24 +87,18 @@ export function NewDatabaseView() {
                 <CardTitle className="flex items-center gap-2 text-sm">
                   <ShieldCheck className="size-4 text-brand" /> Least privilege
                 </CardTitle>
-                <CardDescription>
-                  Backups only need read access. On PostgreSQL 14+ create a dedicated role:
-                </CardDescription>
+                <CardDescription>{grants.intro}</CardDescription>
               </CardHeader>
-              <CardContent>
-                <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-[11.5px] leading-5">
-{`CREATE ROLE dbvault LOGIN
-  PASSWORD '…';
-GRANT pg_read_all_data
-  TO dbvault;`}
-                </pre>
+              <CardContent className="space-y-2">
+                <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-[11.5px] leading-5">{grants.sql}</pre>
+                {grants.note && <p className="text-xs text-muted-foreground">{grants.note}</p>}
               </CardContent>
             </Card>
             <Card size="sm">
               <CardHeader>
                 <CardTitle className="text-sm">What happens next</CardTitle>
                 <CardDescription>
-                  Add a storage destination and a schedule, and DBVault will run <code className="font-mono">pg_dump</code>, compress, encrypt, checksum and
+                  Add a storage destination and a schedule, and DBVault will run <code className="font-mono">{ENGINES[engine].dumpTool}</code>, compress, encrypt, checksum and
                   upload every backup automatically.
                 </CardDescription>
               </CardHeader>

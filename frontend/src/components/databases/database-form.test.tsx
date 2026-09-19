@@ -77,4 +77,31 @@ describe("DatabaseForm", () => {
     expect(onSubmit.mock.calls[0][0]).toMatchObject({ name: "production", host: "db.internal", port: 5432, username: "app", password: "secret" })
     expect(await screen.findByText("A database with this name already exists.")).toBeInTheDocument()
   })
+
+  it("switches engine defaults and submits a MySQL database", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    renderWithProviders(<DatabaseForm mode="create" submitLabel="Save database" onSubmit={onSubmit} />)
+
+    await userEvent.click(screen.getByRole("radio", { name: /MySQL/ }))
+    expect(screen.getByRole("radio", { name: /MySQL/ })).toHaveAttribute("aria-checked", "true")
+    expect(screen.getByLabelText("Port")).toHaveValue(3306)
+    // PostgreSQL's default database name is cleared for MySQL.
+    expect(screen.getByLabelText("Database")).toHaveValue("")
+
+    await userEvent.type(screen.getByLabelText("Name"), "shop")
+    await userEvent.type(screen.getByLabelText("Host"), "mysql.internal")
+    await userEvent.type(screen.getByLabelText("Database"), "shop")
+    await userEvent.type(screen.getByLabelText("Username"), "app")
+    await userEvent.type(screen.getByLabelText("Password"), "secret")
+    await userEvent.click(screen.getByRole("button", { name: "Save database" }))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce())
+    expect(onSubmit.mock.calls[0][0]).toMatchObject({ engine: "mysql", port: 3306, database: "shop", ssl_mode: "prefer" })
+  })
+
+  it("fills the engine from a pasted MySQL connection string", () => {
+    renderWithProviders(<DatabaseForm mode="create" submitLabel="Save database" onSubmit={vi.fn()} />)
+    fireEvent.change(screen.getByLabelText(/connection string/i), { target: { value: "mariadb://app:pw@maria.internal/shop" } })
+    expect(screen.getByRole("radio", { name: /MariaDB/ })).toHaveAttribute("aria-checked", "true")
+    expect(screen.getByLabelText("Port")).toHaveValue(3306)
+  })
 })
