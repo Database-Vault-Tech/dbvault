@@ -15,7 +15,7 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
-import { errorMessage } from "@/lib/api"
+import { ApiError, errorMessage } from "@/lib/api"
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format"
 import { useBackup, useBackups, useCreateRestore, useDatabases } from "@/lib/queries"
 import { cn } from "@/lib/utils"
@@ -75,8 +75,10 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
   // Only flag the name as invalid once there is something to judge; an empty
   // field before a target is chosen is not an error yet.
   const showNameError = mode === "new" && newName !== "" && !nameValid
+  // Typing the target's own name means the user wants to overwrite it.
+  const nameIsTarget = mode === "new" && !!target && newName.trim().toLowerCase() === target.database.toLowerCase()
   // The target must be a live database (a backup's source may have been removed).
-  const ready = !!backupId && !!target && nameValid
+  const ready = !!backupId && !!target && nameValid && !nameIsTarget
 
   const selectSource = (id: string) => {
     setSourceId(id)
@@ -94,7 +96,9 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
           setConfirming(false)
           onCreated(r.id)
         },
-        onError: (err) => toast.error("Couldn't start restore", { description: errorMessage(err) }),
+        onError: (err) => toast.error("Couldn't start restore", {
+          description: err instanceof ApiError && Object.keys(err.fields).length ? Object.values(err.fields).join(" ") : errorMessage(err),
+        }),
       },
     )
 
@@ -200,7 +204,18 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
             <Field data-invalid={showNameError} className="sm:max-w-80">
               <FieldLabel htmlFor="new-name">New database name</FieldLabel>
               <Input id="new-name" className="font-mono" value={newName} onChange={(e) => setNameInput(e.target.value)} />
-              {!showNameError ? (
+              {nameIsTarget ? (
+                <Alert className="mt-1 border-warning/40 bg-warning/5">
+                  <AlertTriangle className="text-warning" />
+                  <AlertTitle>{target?.database} already exists on this server</AlertTitle>
+                  <AlertDescription>
+                    <p>A new database needs a new name. To put the backup into {target?.database} itself, restore into the existing database.</p>
+                    <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setMode("existing")}>
+                      Restore into {target?.database} instead
+                    </Button>
+                  </AlertDescription>
+                </Alert>
+              ) : !showNameError ? (
                 <FieldDescription>The database user needs the CREATEDB privilege on the target server.</FieldDescription>
               ) : (
                 <FieldError>Start with a letter or underscore; use letters, numbers, _ or - (max 63).</FieldError>
