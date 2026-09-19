@@ -2,6 +2,7 @@ package restore
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -20,12 +21,35 @@ func (s *Service) Routes(r chi.Router) {
 
 func (s *Service) handleList(w http.ResponseWriter, r *http.Request) {
 	m, _ := reqctx.MembershipFrom(r.Context())
-	list, err := s.List(r.Context(), m.OrgID, httpx.QueryInt(r, "limit", 50, 1, 200))
+	q := r.URL.Query()
+	f := ListFilter{
+		TargetDatabaseID: q.Get("target_database_id"),
+		Status:           q.Get("status"),
+		Mode:             q.Get("mode"),
+		Limit:            httpx.QueryInt(r, "limit", 50, 1, 200),
+	}
+	if f.TargetDatabaseID != "" && !httpx.IsUUID(f.TargetDatabaseID) {
+		httpx.Error(w, r, apperr.BadRequest("Invalid filter id."))
+		return
+	}
+	if b := q.Get("before"); b != "" {
+		t, err := time.Parse(time.RFC3339Nano, b)
+		if err != nil {
+			httpx.Error(w, r, apperr.BadRequest("before must be an RFC 3339 timestamp."))
+			return
+		}
+		f.Before = &t
+	}
+	list, err := s.List(r.Context(), m.OrgID, f)
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, list)
+	meta := map[string]any{"limit": f.Limit}
+	if len(list) == f.Limit {
+		meta["next_before"] = list[len(list)-1].CreatedAt.Format(time.RFC3339Nano)
+	}
+	httpx.List(w, list, meta)
 }
 
 func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {

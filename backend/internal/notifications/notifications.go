@@ -393,11 +393,43 @@ type Delivery struct {
 	CreatedAt      time.Time  `json:"created_at"`
 }
 
-func (s *Service) Deliveries(ctx context.Context, orgID string, limit int) ([]Delivery, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT d.id, d.notification_id, n.name, n.type, d.event, d.status, d.attempts, d.response_status, d.error,
+// DeliveryFilter narrows and pages the delivery history (newest first).
+type DeliveryFilter struct {
+	NotificationID string
+	Event          string
+	Status         string
+	Before         *time.Time
+	Limit          int
+}
+
+func (s *Service) Deliveries(ctx context.Context, orgID string, f DeliveryFilter) ([]Delivery, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	q := `SELECT d.id, d.notification_id, n.name, n.type, d.event, d.status, d.attempts, d.response_status, d.error,
 		COALESCE(d.payload->>'title', ''), d.delivered_at, d.created_at
 		FROM notification_deliveries d JOIN notifications n ON n.id = d.notification_id
-		WHERE d.organization_id = $1 ORDER BY d.created_at DESC LIMIT $2`, orgID, limit)
+		WHERE d.organization_id = $1`
+	args := []any{orgID}
+	add := func(clause string, v any) {
+		args = append(args, v)
+		q += fmt.Sprintf(clause, len(args))
+	}
+	if f.NotificationID != "" {
+		add(` AND d.notification_id = $%d`, f.NotificationID)
+	}
+	if f.Event != "" {
+		add(` AND d.event = $%d`, f.Event)
+	}
+	if f.Status != "" {
+		add(` AND d.status = $%d`, f.Status)
+	}
+	if f.Before != nil {
+		add(` AND d.created_at < $%d`, *f.Before)
+	}
+	args = append(args, f.Limit)
+	q += fmt.Sprintf(` ORDER BY d.created_at DESC LIMIT $%d`, len(args))
+	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

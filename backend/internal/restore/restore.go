@@ -87,8 +87,40 @@ func scanRestore(row pgx.Row) (Job, error) {
 	return j, err
 }
 
-func (s *Service) List(ctx context.Context, orgID string, limit int) ([]Job, error) {
-	rows, err := s.Pool.Query(ctx, selectRestore+` WHERE r.organization_id = $1 ORDER BY r.created_at DESC LIMIT $2`, orgID, limit)
+// ListFilter narrows and pages the restore history (newest first).
+type ListFilter struct {
+	TargetDatabaseID string
+	Status           string
+	Mode             string
+	Before           *time.Time
+	Limit            int
+}
+
+func (s *Service) List(ctx context.Context, orgID string, f ListFilter) ([]Job, error) {
+	if f.Limit <= 0 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	q := selectRestore + ` WHERE r.organization_id = $1`
+	args := []any{orgID}
+	add := func(clause string, v any) {
+		args = append(args, v)
+		q += fmt.Sprintf(clause, len(args))
+	}
+	if f.TargetDatabaseID != "" {
+		add(` AND r.target_database_id = $%d`, f.TargetDatabaseID)
+	}
+	if f.Status != "" {
+		add(` AND r.status = $%d`, f.Status)
+	}
+	if f.Mode != "" {
+		add(` AND r.mode = $%d`, f.Mode)
+	}
+	if f.Before != nil {
+		add(` AND r.created_at < $%d`, *f.Before)
+	}
+	args = append(args, f.Limit)
+	q += fmt.Sprintf(` ORDER BY r.created_at DESC LIMIT $%d`, len(args))
+	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
