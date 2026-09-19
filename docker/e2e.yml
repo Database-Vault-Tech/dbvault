@@ -1,0 +1,16 @@
+# Adds a sample PostgreSQL database with data for demos and end-to-end tests.
+#   docker compose -f docker-compose.yml -f docker/e2e.yml up -d
+services:
+  sample-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_PASSWORD: shop-password
+      POSTGRES_DB: shop
+    volumes:
+      - ./docker/sample-data.sql:/docker-entrypoint-initdb.d/sample-data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
