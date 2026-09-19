@@ -143,8 +143,11 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 	if err != nil {
 		return Job{}, err
 	}
-	if in.Mode == "new" && strings.EqualFold(in.NewDatabaseName, target.DatabaseName) {
-		return Job{}, apperr.Validation(map[string]string{"new_database_name": "Choose a name different from the existing database."})
+	if in.Mode == "new" {
+		if exists, err := s.databaseExists(ctx, orgID, target.ID, in.NewDatabaseName); err == nil && exists {
+			return Job{}, apperr.Validation(map[string]string{"new_database_name": fmt.Sprintf(
+				"A database named %q already exists on this server. Choose another name, or pick \"Restore into the existing database\" to overwrite it.", in.NewDatabaseName)})
+		}
 	}
 
 	var restoreID, jobID string
@@ -188,6 +191,30 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 	}
 	_ = s.Queue.Push(ctx, jobID)
 	return s.Get(ctx, orgID, restoreID)
+}
+
+// databaseExists checks the target server for a database name. Connection
+// problems are not reported here; the restore job surfaces them with context.
+func (s *Service) databaseExists(ctx context.Context, orgID, targetID, name string) (bool, error) {
+	t, err := s.Databases.Target(ctx, orgID, targetID)
+	if err != nil {
+		return false, err
+	}
+	m, err := t.Materialize(s.WorkDir)
+	if err != nil {
+		return false, err
+	}
+	defer m.Close()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	conn, err := m.Connect(ctx, "")
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close(context.WithoutCancel(ctx))
+	var exists bool
+	err = conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE lower(datname) = lower($1))`, name).Scan(&exists)
+	return exists, err
 }
 
 func isUUID(s string) bool {
