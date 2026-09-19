@@ -1,0 +1,20 @@
+# Local configuration (contains secrets)
+.env
+.env.local
+*.env.bak
+
+# Build output
+/backend/bin/
+/cli/dist/
+/cli/dbvault
+*.exe
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Test artefacts
+coverage.out
+*.test
