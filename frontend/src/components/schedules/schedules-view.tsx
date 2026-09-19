@@ -75,7 +75,7 @@ export function SchedulesView() {
         <EmptyState
           icon={CalendarClock}
           title="Add a database first"
-          description="Schedules back up a connected PostgreSQL database."
+          description="Schedules back up a connected database."
           action={
             <Button asChild>
               <Link href="/databases/new">Add database</Link>

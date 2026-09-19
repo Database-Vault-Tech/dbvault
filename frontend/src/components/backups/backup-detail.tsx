@@ -29,6 +29,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { backupDownloadUrl, errorMessage } from "@/lib/api"
+import { engineMeta } from "@/lib/engines"
 import { formatBytes, formatDateTime, formatDuration } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useBackup, useCancelJob, useCreateBackup, useDeleteBackup, useSystemStatus, useVerifyBackup } from "@/lib/queries"
@@ -122,6 +123,7 @@ export function BackupDetailView({ id }: { id: string }) {
   }
 
   const { backup: b, job, logs, verification_job, verification_logs } = data
+  const engine = engineMeta(b.engine)
   const active = b.status === "queued" || b.status === "running"
   const completed = b.status === "completed"
   const verifying = b.verification_status === "running" || (verification_job && (verification_job.status === "queued" || verification_job.status === "running"))
@@ -182,7 +184,7 @@ export function BackupDetailView({ id }: { id: string }) {
                         disabled={verify.isPending || !!verifying}
                         onClick={() =>
                           verify.mutate(b.id, {
-                            onSuccess: () => toast.success("Verification queued", { description: "Restoring into a temporary PostgreSQL…" }),
+                            onSuccess: () => toast.success("Verification queued", { description: `Restoring into a temporary ${engine.label}…` }),
                             onError: (err) => toast.error("Couldn't start verification", { description: errorMessage(err) }),
                           })
                         }
@@ -217,8 +219,12 @@ export function BackupDetailView({ id }: { id: string }) {
                         <DropdownMenuItem asChild>
                           <a href={backupDownloadUrl(b.id, "dump")} download>
                             <div>
-                              <div>Decrypted .dump for pg_restore</div>
-                              <div className="text-xs text-muted-foreground">Plain pg_dump custom format · {formatBytes(b.raw_size_bytes)}</div>
+                              <div>
+                                Decrypted {engine.extension} for {engine.restoreTool}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                Plain {engine.formatLabel} · {formatBytes(b.raw_size_bytes)}
+                              </div>
                             </div>
                           </a>
                         </DropdownMenuItem>
@@ -278,10 +284,12 @@ export function BackupDetailView({ id }: { id: string }) {
               <Detail label="Storage">
                 <StorageBadge type={b.storage_type} name={b.storage_name} />
               </Detail>
-              <Detail label="PostgreSQL">{b.pg_version ?? "—"}</Detail>
-              <Detail label="pg_dump">{b.pg_dump_version ?? "—"}</Detail>
+              <Detail label={engine.label}>{b.pg_version ?? "—"}</Detail>
+              <Detail label="Dump tool">
+                {!b.pg_dump_version ? "—" : /^[a-z]/i.test(b.pg_dump_version) ? b.pg_dump_version : `${engine.dumpTool} ${b.pg_dump_version}`}
+              </Detail>
               <Detail label="Tables">{b.table_count ?? "—"}</Detail>
-              <Detail label="Format">{b.format === "pg_dump_custom" ? "pg_dump custom" : b.format}</Detail>
+              <Detail label="Format">{b.format === "pg_dump_custom" || b.format === "sql" ? engine.formatLabel : b.format}</Detail>
               <Detail label="Started">{formatDateTime(b.started_at)}</Detail>
               <Detail label="Completed">{formatDateTime(b.completed_at)}</Detail>
               {b.storage_key && (

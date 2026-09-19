@@ -28,7 +28,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <div className="w-full max-w-sm">{children}</div>
         </div>
         <p className="text-center text-xs text-muted-foreground">
-          Open-source PostgreSQL backups. Your database, your backups, your infrastructure.
+          Open-source SQL database backups. Your database, your backups, your infrastructure.
         </p>
       </div>
       <aside className="relative hidden overflow-hidden border-l bg-muted/40 text-foreground lg:flex lg:flex-col lg:justify-between lg:p-12">
@@ -39,7 +39,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
             A backup you haven&apos;t restored is just a hope.
           </h2>
           <p className="max-w-md text-muted-foreground">
-            DBVault encrypts every dump, verifies its checksum, and can prove it restores in a disposable PostgreSQL sandbox.
+            DBVault encrypts every dump, verifies its checksum, and can prove it restores in a disposable sandbox database.
           </p>
         </div>
         <div className="dark relative rounded-xl border bg-card text-card-foreground shadow-2xl">

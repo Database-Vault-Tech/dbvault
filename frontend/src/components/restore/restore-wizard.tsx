@@ -16,6 +16,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { ApiError, errorMessage } from "@/lib/api"
+import { engineMeta } from "@/lib/engines"
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format"
 import { useBackup, useBackups, useCreateRestore, useDatabases } from "@/lib/queries"
 import { cn } from "@/lib/utils"
@@ -67,8 +68,12 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
   const backups = useBackups({ database_id: sourceId || undefined, status: "completed" })
   const backupList = useMemo(() => (sourceId ? (backups.data?.pages.flatMap((p) => p.data) ?? []) : []), [backups.data, sourceId])
   const source = databases?.find((d) => d.id === sourceId)
-  const target = databases?.find((d) => d.id === targetId)
   const backup = backupList.find((b) => b.id === backupId) ?? (presetBackup?.id === backupId ? presetBackup : undefined)
+  // A backup can only be restored into a server of the same engine.
+  const engine = engineMeta(backup?.engine ?? source?.engine)
+  const targets = databases?.filter((d) => engineMeta(d.engine).id === engine.id)
+  const target = targets?.find((d) => d.id === targetId)
+  const createPrivilege = engine.id === "postgres" ? "CREATEDB privilege" : "CREATE privilege"
   // Suggest a name until the user types their own.
   const newName = nameInput ?? (target ? suggestName(target.database) : "")
   const nameValid = mode === "existing" || IDENT.test(newName)
@@ -172,7 +177,7 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
                 <SelectValue placeholder="Select target" />
               </SelectTrigger>
               <SelectContent>
-                {databases?.map((d) => (
+                {targets?.map((d) => (
                   <SelectItem key={d.id} value={d.id}>
                     {d.name} <span className="font-mono text-xs text-muted-foreground">{d.host}/{d.database}</span>
                   </SelectItem>
@@ -196,7 +201,10 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
                 <span className="flex items-center gap-1.5 text-sm font-medium">
                   <AlertTriangle className="size-4 text-destructive" /> Restore into the existing database
                 </span>
-                <span className="block text-xs text-muted-foreground">Destructive: replaces objects in {target?.database ?? "the target database"}.</span>
+                <span className="block text-xs text-muted-foreground">
+                  Destructive: replaces objects in {target?.database ?? "the target database"}.
+                  {!engine.atomicRestore && " Not transactional."}
+                </span>
               </span>
             </Label>
           </RadioGroup>
@@ -216,7 +224,7 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
                   </AlertDescription>
                 </Alert>
               ) : !showNameError ? (
-                <FieldDescription>The database user needs the CREATEDB privilege on the target server.</FieldDescription>
+                <FieldDescription>The database user needs the {createPrivilege} on the target server.</FieldDescription>
               ) : (
                 <FieldError>Start with a letter or underscore; use letters, numbers, _ or - (max 63).</FieldError>
               )}
@@ -226,9 +234,11 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
               <AlertTriangle />
               <AlertTitle>Restoring this backup may overwrite existing data.</AlertTitle>
               <AlertDescription>
-                Every table, view and function contained in the backup is dropped and recreated in <span className="font-mono">{target?.database}</span>. The restore
-                runs in a single transaction, so it is all-or-nothing: if anything fails, the database is left unchanged. Data written after the backup was taken
-                will be lost.
+                Every table, view and function contained in the backup is dropped and recreated in <span className="font-mono">{target?.database}</span>.{" "}
+                {engine.atomicRestore
+                  ? "The restore runs in a single transaction, so it is all-or-nothing: if anything fails, the database is left unchanged."
+                  : `${engine.label} can't restore in a single transaction: if the restore fails part-way, the database is left partially restored. Restoring into a new database first is safer.`}{" "}
+                Data written after the backup was taken will be lost.
               </AlertDescription>
             </Alert>
           )}
@@ -282,9 +292,13 @@ export function RestoreWizard({ initialBackupId, onCreated }: { initialBackupId?
           </div>
           <ul className="space-y-1.5 text-sm text-muted-foreground">
             <SummaryStep>Checksum verified before anything is restored</SummaryStep>
-            <SummaryStep>Restored in a single transaction: all-or-nothing</SummaryStep>
+            {engine.atomicRestore ? (
+              <SummaryStep>Restored in a single transaction: all-or-nothing</SummaryStep>
+            ) : (
+              <SummaryStep warn={mode === "existing"}>Not transactional: a failed restore can leave the target partially restored</SummaryStep>
+            )}
             {mode === "new" ? (
-              <SummaryStep>Needs the CREATEDB privilege on the target server</SummaryStep>
+              <SummaryStep>Needs the {createPrivilege} on the target server</SummaryStep>
             ) : (
               <SummaryStep warn>Data written after this backup was taken will be lost</SummaryStep>
             )}

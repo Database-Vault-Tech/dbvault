@@ -56,7 +56,7 @@ export function DashboardView() {
       )}
 
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 xl:grid-cols-6">
-        <StatCard label="Databases" icon={Database} loading={loading} value={s?.databases ?? 0} hint="Connected PostgreSQL databases" />
+        <StatCard label="Databases" icon={Database} loading={loading} value={s?.databases ?? 0} hint="Connected databases" />
         <StatCard
           label="Protected"
           icon={ShieldCheck}
@@ -97,7 +97,7 @@ export function DashboardView() {
               description={
                 s?.databases
                   ? "Run a backup now, or create a schedule and DBVault will take it from there."
-                  : "Connect your first PostgreSQL database and DBVault will start protecting it."
+                  : "Connect your first PostgreSQL, MySQL or MariaDB database and DBVault will start protecting it."
               }
               action={
                 s?.databases ? (

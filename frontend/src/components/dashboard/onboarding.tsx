@@ -17,10 +17,10 @@ interface Step {
 /** First-run checklist, derived from real state. Hidden once complete. */
 export function Onboarding({ databases, storage, schedules, backups }: { databases: number; storage: number; schedules: number; backups: number }) {
   const steps: Step[] = [
-    { title: "Connect a PostgreSQL database", description: "Host, credentials and a connection test.", href: "/databases/new", done: databases > 0 },
+    { title: "Connect a database", description: "Host, credentials and a connection test.", href: "/databases/new", done: databases > 0 },
     { title: "Add a storage destination", description: "S3, Cloudflare R2, MinIO or local disk.", href: "/storage?new=1", done: storage > 0 },
     { title: "Create a backup schedule", description: "Frequency, retention, compression and encryption.", href: "/schedules?new=1", done: schedules > 0 },
-    { title: "Run your first backup", description: "Watch pg_dump, encryption and upload live.", href: "/backups", done: backups > 0 },
+    { title: "Run your first backup", description: "Watch the dump, encryption and upload live.", href: "/backups", done: backups > 0 },
   ]
   const done = steps.filter((s) => s.done).length
   if (done === steps.length) return null

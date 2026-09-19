@@ -340,7 +340,7 @@ function ScheduleForm({ schedule, initialDatabaseId, onDone }: { schedule?: Sche
             <Switch id="sc-verify" checked={verifyAfter} onCheckedChange={(v) => form.setValue("verify_after_backup", v)} />
             <FieldContent>
               <FieldLabel htmlFor="sc-verify">Verify after each backup</FieldLabel>
-              <FieldDescription>Restore every new backup into a disposable PostgreSQL sandbox and check its tables.</FieldDescription>
+              <FieldDescription>Restore every new backup into a disposable sandbox database and check its tables.</FieldDescription>
             </FieldContent>
           </Field>
           <Field orientation="horizontal">

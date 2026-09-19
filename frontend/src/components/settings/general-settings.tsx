@@ -184,6 +184,17 @@ function SystemCard() {
                       <StatusDot tone="success" />
                       <span className="font-mono text-xs">{w.hostname}</span>
                       <Badge variant="outline">pg_dump {w.capabilities.pg_dump_version ?? "missing"}</Badge>
+                      {Object.entries(w.capabilities.engines ?? {}).map(([id, e]) => (
+                        <Badge
+                          key={id}
+                          variant="outline"
+                          title={e.verify_detail}
+                          className={!e.tools_available ? "border-destructive/40 text-destructive" : undefined}
+                        >
+                          {e.label}
+                          {!e.tools_available ? " · tools missing" : e.verify_available ? " · restore tests" : " · no restore tests"}
+                        </Badge>
+                      ))}
                       <span className="text-xs text-muted-foreground tabular">
                         {w.active_jobs}/{w.concurrency} jobs running
                       </span>

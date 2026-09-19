@@ -8,10 +8,19 @@ import { StatusBadge } from "@/components/app/status"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
+import { engineLabel } from "@/lib/engines"
 import { formatDuration, formatNumber } from "@/lib/format"
 import type { Backup, Job, LogEntry, VerificationCheck } from "@/lib/types"
 
-const STEPS = ["Download", "Checksum", "Decrypt", "Decompress", "Restore into a temporary PostgreSQL", "Run verification queries", "Destroy sandbox"]
+const steps = (engine: string) => [
+  "Download",
+  "Checksum",
+  "Decrypt",
+  "Decompress",
+  `Restore into a temporary ${engineLabel(engine)}`,
+  "Run verification queries",
+  "Destroy sandbox",
+]
 
 function CheckRow({ label, check }: { label: string; check: VerificationCheck }) {
   return (
@@ -28,6 +37,7 @@ function CheckRow({ label, check }: { label: string; check: VerificationCheck })
 export function VerificationCard({ backup, job, logs }: { backup: Backup; job?: Job; logs?: LogEntry[] }) {
   const running = backup.verification_status === "running" || (job && (job.status === "queued" || job.status === "running"))
   const r = backup.verification
+  const STEPS = steps(backup.engine)
   return (
     <Card>
       <CardHeader>
