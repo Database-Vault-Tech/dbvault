@@ -1,0 +1,22 @@
+# Optional: run restore tests in a temporary PostgreSQL *Docker container*
+# whose major version matches each backup (instead of the shared
+# verify-postgres server).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.verify-docker.yml up -d
+#
+# SECURITY: mounting the Docker socket gives the worker control of the Docker
+# host (it is root-equivalent). Only enable this on hosts dedicated to DBVault.
+# Set DOCKER_GID to the group id that owns /var/run/docker.sock
+# (stat -c %g /var/run/docker.sock).
+
+services:
+  worker:
+    group_add:
+      - "${DOCKER_GID:-999}"
+    environment:
+      VERIFY_MODE: docker
+      VERIFY_DOCKER_HOST: unix:///var/run/docker.sock
+      VERIFY_DOCKER_NETWORK: dbvault
+      VERIFY_DOCKER_IMAGE: postgres:{major}-alpine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
