@@ -4,8 +4,8 @@ import { Fragment } from "react"
 import { Section, SectionHeading } from "./primitives"
 
 const STAGES = [
-  { name: "PostgreSQL", detail: "Your database" },
-  { name: "pg_dump", detail: "Custom format" },
+  { name: "Your database", detail: "PostgreSQL · more soon" },
+  { name: "Native dump", detail: "e.g. pg_dump" },
   { name: "Compression", detail: "zstd / gzip" },
   { name: "Encryption", detail: "age X25519" },
   { name: "Checksum", detail: "SHA-256" },
@@ -17,7 +17,7 @@ const STAGES = [
 const FACTS = [
   { value: "1 pass", label: "Dump, compress, encrypt, hash and upload stream through connected pipes." },
   { value: "~60 MB", label: "Worker memory while backing up a 350 MB database — memory is bounded by one upload part." },
-  { value: "0 partial objects", label: "If pg_dump or the upload fails, multipart uploads are aborted and nothing is recorded as complete." },
+  { value: "0 partial objects", label: "If the dump or the upload fails, multipart uploads are aborted and nothing is recorded as complete." },
 ]
 
 export function Architecture() {
@@ -27,7 +27,7 @@ export function Architecture() {
         id="arch-title"
         eyebrow="Backup architecture"
         title="A streaming pipeline built on battle-tested tools."
-        description="DBVault never re-implements the dump format or invents cryptography. It connects pg_dump, zstd, age and SHA-256 into one streaming pipeline, then proves the result."
+        description="DBVault never re-implements the dump format or invents cryptography. It connects each engine's native dump tool, zstd, age and SHA-256 into one streaming pipeline, then proves the result."
       />
       <div className="mt-14 rounded-xl border bg-card/40 p-4 sm:p-8">
         <ol className="flex flex-col items-stretch gap-2 lg:flex-row lg:items-center lg:gap-0" aria-label="Backup pipeline stages">

@@ -43,7 +43,7 @@ export function SiteFooter() {
       <div className="mx-auto grid w-full max-w-6xl gap-10 px-4 py-14 sm:px-6 md:grid-cols-[1.4fr_repeat(3,1fr)] lg:px-8">
         <div className="space-y-3">
           <Logo />
-          <p className="max-w-xs text-sm text-muted-foreground">Open-source PostgreSQL backups that just work.</p>
+          <p className="max-w-xs text-sm text-muted-foreground">Open-source SQL database backups that just work.</p>
         </div>
         {COLUMNS.map((c) => (
           <nav key={c.title} aria-label={c.title} className="space-y-3">

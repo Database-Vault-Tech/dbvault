@@ -8,9 +8,9 @@ const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] })
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: { default: "DBVault — Open-source PostgreSQL backups that just work", template: "%s · DBVault" },
+  title: { default: "DBVault — Open-source SQL database backups that just work", template: "%s · DBVault" },
   description:
-    "Protect your PostgreSQL databases with automated backups, encrypted storage, retention policies, restore testing, and a developer-friendly dashboard. Self-hosted and open source.",
+    "Protect your SQL databases with automated backups, encrypted storage, retention policies, restore testing, and a developer-friendly dashboard. Self-hosted and open source.",
   applicationName: "DBVault",
   icons: { icon: "/icon.svg" },
 }

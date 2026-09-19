@@ -16,7 +16,7 @@ export function GitHubCTA() {
               Stop hoping your backups work.
             </h2>
             <p className="text-muted-foreground sm:text-lg">
-              Protect your first PostgreSQL database in minutes — and prove it restores.
+              Protect your first database in minutes — and prove it restores.
             </p>
             <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
               <Button size="lg" asChild className="h-10 w-full px-5 sm:w-auto bg-brand text-brand-foreground hover:bg-brand/90 font-semibold">

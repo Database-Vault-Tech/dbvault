@@ -19,7 +19,7 @@ export function OpenSource() {
             Your database. Your backups. Your infrastructure.
           </h2>
           <p className="text-base text-pretty text-muted-foreground sm:text-lg">
-            DBVault is designed to be self-hosted. Three commands give you the dashboard, API, worker, scheduler, PostgreSQL, Redis and a local S3-compatible bucket.
+            DBVault is designed to be self-hosted. Three commands give you the dashboard, API, worker, scheduler, a metadata database, Redis and a local S3-compatible bucket.
           </p>
           <ul className="space-y-2.5">
             {POINTS.map((p) => (

@@ -19,7 +19,7 @@ const FEATURES = [
   {
     icon: Archive,
     title: "Automated backups",
-    body: "A Go worker runs pg_dump in custom format and streams it through compression, encryption and upload in a single pass — nothing is staged on disk.",
+    body: "A Go worker runs the database's native dump tool (pg_dump for PostgreSQL) and streams it through compression, encryption and upload in a single pass — nothing is staged on disk.",
   },
   {
     icon: CalendarClock,
@@ -28,8 +28,8 @@ const FEATURES = [
   },
   {
     icon: Database,
-    title: "PostgreSQL support",
-    body: "Uses the official pg_dump and pg_restore tooling, checks client/server version compatibility, and supports every libpq SSL mode.",
+    title: "SQL databases",
+    body: "Built on each engine's official tooling. PostgreSQL is fully supported (9.2 – 18, every SSL mode); MySQL, MariaDB, SQL Server and SQLite are next.",
   },
   {
     icon: Cloud,
@@ -44,7 +44,7 @@ const FEATURES = [
   {
     icon: BadgeCheck,
     title: "Backup verification",
-    body: "SHA-256 checksums are verified after every upload, and restore tests run in a disposable PostgreSQL container or sandbox server.",
+    body: "SHA-256 checksums are verified after every upload, and restore tests run in a disposable database container or sandbox server.",
   },
   {
     icon: RotateCcw,
@@ -69,7 +69,7 @@ const FEATURES = [
   {
     icon: Container,
     title: "Docker",
-    body: "One docker compose up -d starts the API, worker, scheduler, dashboard, PostgreSQL, Redis and MinIO — secrets are generated on first boot.",
+    body: "One docker compose up -d starts the API, worker, scheduler, dashboard, metadata database, Redis and MinIO — secrets are generated on first boot.",
   },
   {
     icon: Scale,
