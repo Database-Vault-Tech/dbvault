@@ -47,10 +47,13 @@ export interface ConnectionTest {
   tested_at: string
 }
 
+export type DatabaseEngine = "postgres" | "mysql" | "mariadb" | "sqlserver" | "sqlite"
+
 export interface Database {
   id: string
   organization_id: string
   name: string
+  engine: DatabaseEngine
   host: string
   port: number
   database: string
@@ -251,6 +254,7 @@ export interface Backup {
   organization_id: string
   database_id: string
   database_name: string
+  engine: DatabaseEngine
   schedule_id: string | null
   schedule_name: string | null
   storage_destination_id: string
