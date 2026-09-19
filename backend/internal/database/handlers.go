@@ -70,7 +70,7 @@ func (s *Service) handleCreate(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	if err := in.Validate(true); err != nil {
+	if err := in.Validate(s.Drivers, true); err != nil {
 		httpx.Error(w, r, err)
 		return
 	}
@@ -106,7 +106,14 @@ func (s *Service) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	if err := in.Validate(false); err != nil {
+	// The engine can't change after creation; validate against the stored one.
+	existing, err := s.Get(r.Context(), m.OrgID, id)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	in.Engine = existing.Engine
+	if err := in.Validate(s.Drivers, false); err != nil {
 		httpx.Error(w, r, err)
 		return
 	}
@@ -176,7 +183,12 @@ func (s *Service) handleTestUnsaved(w http.ResponseWriter, r *http.Request) {
 	}
 	in := req.Input
 	needPassword := req.DatabaseID == ""
-	if err := in.Validate(needPassword); err != nil {
+	if req.DatabaseID != "" && httpx.IsUUID(req.DatabaseID) {
+		if existing, err := s.Get(r.Context(), m.OrgID, req.DatabaseID); err == nil {
+			in.Engine = existing.Engine
+		}
+	}
+	if err := in.Validate(s.Drivers, needPassword); err != nil {
 		httpx.Error(w, r, err)
 		return
 	}

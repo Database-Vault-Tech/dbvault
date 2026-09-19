@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dbvault/dbvault/backend/internal/database"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 )
 
 const sandboxLabel = "dbvault.verify"
@@ -117,11 +117,16 @@ func (d *DockerSandbox) Check(ctx context.Context) error {
 	return nil
 }
 
-func (d *DockerSandbox) image(major int) string {
-	if major <= 0 {
-		major = 17
+// image returns the sandbox image. VERIFY_DOCKER_IMAGE (with {major})
+// overrides the PostgreSQL image; other engines use their driver's default.
+func (d *DockerSandbox) image(drv engine.Driver, spec engine.SandboxSpec, major int) string {
+	if drv.Name() == engine.Postgres && d.imageTemplate != "" {
+		if major <= 0 {
+			major = 17
+		}
+		return strings.ReplaceAll(d.imageTemplate, "{major}", strconv.Itoa(major))
 	}
-	return strings.ReplaceAll(d.imageTemplate, "{major}", strconv.Itoa(major))
+	return spec.Image
 }
 
 func (d *DockerSandbox) ensureImage(ctx context.Context, image string) error {
@@ -155,12 +160,14 @@ func (d *DockerSandbox) ensureImage(ctx context.Context, image string) error {
 	return sc.Err()
 }
 
-func (d *DockerSandbox) Provision(ctx context.Context, major int) (*Instance, error) {
-	image := d.image(major)
+func (d *DockerSandbox) Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error) {
+	password := randomHex(16)
+	spec := drv.Sandbox(major, password)
+	image := d.image(drv, spec, major)
 	if err := d.ensureImage(ctx, image); err != nil {
 		return nil, err
 	}
-	password := randomHex(16)
+	portKey := strconv.Itoa(spec.Port) + "/tcp"
 	name := "dbvault-verify-" + randomHex(6)
 	hostConfig := map[string]any{
 		"AutoRemove": false,
@@ -169,23 +176,23 @@ func (d *DockerSandbox) Provision(ctx context.Context, major int) (*Instance, er
 	if d.network != "" {
 		hostConfig["NetworkMode"] = d.network
 	} else {
-		hostConfig["PortBindings"] = map[string]any{"5432/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": ""}}}
+		hostConfig["PortBindings"] = map[string]any{portKey: []map[string]string{{"HostIp": "127.0.0.1", "HostPort": ""}}}
 	}
 	var created struct {
 		ID string `json:"Id"`
 	}
 	err := d.do(ctx, http.MethodPost, "/containers/create?name="+name, map[string]any{
 		"Image":        image,
-		"Env":          []string{"POSTGRES_PASSWORD=" + password, "POSTGRES_DB=verify"},
+		"Env":          spec.Env,
 		"Labels":       map[string]string{sandboxLabel: "true"},
-		"ExposedPorts": map[string]any{"5432/tcp": map[string]any{}},
+		"ExposedPorts": map[string]any{portKey: map[string]any{}},
 		"HostConfig":   hostConfig,
 	}, &created)
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox container: %w", err)
 	}
 	inst := &Instance{
-		DBName:      "verify",
+		DBName:      spec.Database,
 		Description: "temporary Docker container " + image,
 		destroy: func(ctx context.Context) error {
 			return d.do(ctx, http.MethodDelete, "/containers/"+created.ID+"?force=true&v=true", nil, nil)
@@ -207,11 +214,11 @@ func (d *DockerSandbox) Provision(ctx context.Context, major int) (*Instance, er
 		_ = inst.Destroy()
 		return nil, err
 	}
-	target := database.Target{Username: "postgres", Password: password, Database: "verify", SSLMode: "disable"}
+	target := engine.Target{Engine: drv.Name(), Username: spec.Username, Password: spec.Password, Database: spec.Database, SSLMode: spec.SSLMode}
 	if d.network != "" {
-		target.Host, target.Port = name, 5432
+		target.Host, target.Port = name, spec.Port
 	} else {
-		bindings := info.NetworkSettings.Ports["5432/tcp"]
+		bindings := info.NetworkSettings.Ports[portKey]
 		if len(bindings) == 0 {
 			_ = inst.Destroy()
 			return nil, errors.New("sandbox container has no published port")
@@ -220,7 +227,7 @@ func (d *DockerSandbox) Provision(ctx context.Context, major int) (*Instance, er
 		target.Port, _ = strconv.Atoi(bindings[0].HostPort)
 	}
 	inst.Target = target
-	if err := waitForPostgres(ctx, target, "verify", 120*time.Second); err != nil {
+	if err := waitReady(ctx, drv, target, 180*time.Second); err != nil {
 		_ = inst.Destroy()
 		return nil, err
 	}

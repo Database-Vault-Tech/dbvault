@@ -96,13 +96,17 @@ func (s *Service) runBackup(ctx context.Context, job jobs.Job, b Backup, log *jo
 		}
 		publicKey = k
 	}
+	drv, err := s.Engine.Drivers.For(target)
+	if err != nil {
+		return Result{}, err
+	}
 	now := time.Now()
-	key := ObjectKey(dest.Config.Prefix, b.DatabaseName, now, b.Compression, b.Encrypted, "")
+	key := ObjectKey(dest.Config.Prefix, b.DatabaseName, now, drv.FileExtension(), b.Compression, b.Encrypted, "")
 	if exists, err := st.Exists(ctx, key); err == nil && exists {
 		// Two backups in the same second: keep names predictable but unique.
-		key = ObjectKey(dest.Config.Prefix, b.DatabaseName, now, b.Compression, b.Encrypted, b.ID[:8])
+		key = ObjectKey(dest.Config.Prefix, b.DatabaseName, now, drv.FileExtension(), b.Compression, b.Encrypted, b.ID[:8])
 	}
-	_, _ = s.Pool.Exec(ctx, `UPDATE backups SET storage_key = $2 WHERE id = $1`, b.ID, key)
+	_, _ = s.Pool.Exec(ctx, `UPDATE backups SET storage_key = $2, format = $3 WHERE id = $1`, b.ID, key, drv.Format())
 	log.Infof("Destination: %s (%s)", dest.Name, st.Describe())
 
 	return s.Engine.Run(ctx, Request{

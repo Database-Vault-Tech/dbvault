@@ -13,25 +13,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
-	"github.com/dbvault/dbvault/backend/internal/database"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 )
 
-// Sandbox provisions disposable PostgreSQL databases for restore tests.
+// Sandbox provisions disposable databases for restore tests.
 type Sandbox interface {
 	// Name describes the sandbox kind for reports ("docker", "server").
 	Name() string
 	// Check reports whether the sandbox can currently be used.
 	Check(ctx context.Context) error
-	// Provision creates an empty database for a dump of the given major
-	// PostgreSQL version. The instance must always be destroyed.
-	Provision(ctx context.Context, major int) (*Instance, error)
+	// Provision creates an empty database able to restore a backup of the
+	// given engine and major version. The instance must always be destroyed.
+	Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error)
 }
 
 // Instance is a provisioned, empty sandbox database.
 type Instance struct {
-	Target      database.Target
+	Target      engine.Target
 	DBName      string
 	Description string
 	destroy     func(ctx context.Context) error
@@ -54,22 +52,13 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// waitForPostgres polls until the server accepts connections.
-func waitForPostgres(ctx context.Context, t database.Target, dbName string, timeout time.Duration) error {
-	m, err := t.Materialize("")
-	if err != nil {
-		return err
-	}
-	defer m.Close()
+// waitReady polls until the sandbox accepts connections.
+func waitReady(ctx context.Context, drv engine.Driver, t engine.Target, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
 		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		conn, err := m.Connect(cctx, dbName)
-		if err == nil {
-			err = conn.Ping(cctx)
-			conn.Close(cctx)
-		}
+		_, err := drv.Inspect(cctx, t)
 		cancel()
 		if err == nil {
 			return nil
@@ -81,18 +70,19 @@ func waitForPostgres(ctx context.Context, t database.Target, dbName string, time
 		case <-time.After(time.Second):
 		}
 	}
-	return fmt.Errorf("sandbox PostgreSQL did not become ready: %v", lastErr)
+	return fmt.Errorf("sandbox %s did not become ready: %v", drv.Label(), lastErr)
 }
 
-// ServerSandbox creates a throwaway database on a dedicated PostgreSQL
-// server (VERIFY_POSTGRES_URL) for each test and drops it afterwards. It
-// needs no Docker access. Use a server that holds no other data.
+// ServerSandbox creates a throwaway database on a dedicated server
+// (VERIFY_POSTGRES_URL) for each test and drops it afterwards. It needs no
+// Docker access. Use a server that holds no other data.
 type ServerSandbox struct {
-	admin database.Target
+	admin engine.Target
+	drv   engine.Driver
 }
 
-// NewServerSandbox parses the admin connection URL.
-func NewServerSandbox(adminURL string) (*ServerSandbox, error) {
+// NewServerSandbox parses the admin connection URL of a PostgreSQL server.
+func NewServerSandbox(adminURL string, drv engine.Driver) (*ServerSandbox, error) {
 	u, err := url.Parse(adminURL)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return nil, errors.New("VERIFY_POSTGRES_URL must be a postgres:// URL")
@@ -110,66 +100,42 @@ func NewServerSandbox(adminURL string) (*ServerSandbox, error) {
 	if db == "" {
 		db = "postgres"
 	}
-	return &ServerSandbox{admin: database.Target{Host: u.Hostname(), Port: port, Database: db, Username: u.User.Username(), Password: pw, SSLMode: sslmode}}, nil
+	return &ServerSandbox{drv: drv, admin: engine.Target{Engine: drv.Name(), Host: u.Hostname(), Port: port, Database: db,
+		Username: u.User.Username(), Password: pw, SSLMode: sslmode}}, nil
 }
 
 func (s *ServerSandbox) Name() string { return "server" }
 
 func (s *ServerSandbox) Check(ctx context.Context) error {
-	m, err := s.admin.Materialize("")
-	if err != nil {
-		return err
-	}
-	defer m.Close()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	conn, err := m.Connect(ctx, "")
-	if err != nil {
+	if _, err := s.drv.Inspect(ctx, s.admin); err != nil {
 		return fmt.Errorf("verification server unreachable: %w", err)
 	}
-	return conn.Close(ctx)
+	return nil
 }
 
-func (s *ServerSandbox) Provision(ctx context.Context, major int) (*Instance, error) {
-	m, err := s.admin.Materialize("")
-	if err != nil {
-		return nil, err
+func (s *ServerSandbox) Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error) {
+	if drv.Name() != s.drv.Name() {
+		return nil, fmt.Errorf("the verification server runs %s, so it can't test %s backups; use VERIFY_MODE=docker", s.drv.Label(), drv.Label())
 	}
-	defer m.Close()
-	conn, err := m.Connect(ctx, "")
+	info, err := s.drv.Inspect(ctx, s.admin)
 	if err != nil {
 		return nil, fmt.Errorf("verification server unreachable: %w", err)
 	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	var serverMajor int
-	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int / 10000`).Scan(&serverMajor); err != nil {
-		return nil, err
-	}
-	if major > serverMajor {
-		return nil, fmt.Errorf("the verification server runs PostgreSQL %d but the backup is from PostgreSQL %d; use a newer VERIFY_POSTGRES_URL server or VERIFY_MODE=docker", serverMajor, major)
+	if major > info.Major {
+		return nil, fmt.Errorf("the verification server runs %s %d but the backup is from %s %d; use a newer VERIFY_POSTGRES_URL server or VERIFY_MODE=docker",
+			s.drv.Label(), info.Major, drv.Label(), major)
 	}
 	name := "dbvault_verify_" + randomHex(6)
-	if _, err := conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-		return nil, fmt.Errorf("create sandbox database: %w", database.FriendlyError(err))
+	if err := s.drv.CreateDatabase(ctx, s.admin, name); err != nil {
+		return nil, fmt.Errorf("create sandbox database: %w", err)
 	}
-	admin := s.admin
+	admin, sdrv := s.admin, s.drv
 	return &Instance{
 		Target:      admin,
 		DBName:      name,
-		Description: fmt.Sprintf("temporary database on verification server (PostgreSQL %d)", serverMajor),
-		destroy: func(ctx context.Context) error {
-			m, err := admin.Materialize("")
-			if err != nil {
-				return err
-			}
-			defer m.Close()
-			c, err := m.Connect(ctx, "")
-			if err != nil {
-				return err
-			}
-			defer c.Close(ctx)
-			_, err = c.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
-			return err
-		},
+		Description: fmt.Sprintf("temporary database on verification server (%s %d)", s.drv.Label(), info.Major),
+		destroy:     func(ctx context.Context) error { return sdrv.DropDatabase(ctx, admin, name) },
 	}, nil
 }

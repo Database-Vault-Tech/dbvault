@@ -20,9 +20,9 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/database"
 	"github.com/dbvault/dbvault/backend/internal/db"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
-	"github.com/dbvault/dbvault/backend/internal/pgtools"
 	"github.com/dbvault/dbvault/backend/internal/storage"
 	"github.com/dbvault/dbvault/backend/internal/validate"
 )
@@ -38,7 +38,7 @@ type Service struct {
 	Destinations *storage.DestinationService
 	Keys         *encryption.KeyStore
 	Notify       *notifications.Service
-	Tools        pgtools.Tools
+	Drivers      *engine.Registry
 	WorkDir      string
 	AppURL       string
 	// Sandbox is nil when restore testing is disabled.
@@ -143,6 +143,10 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 	if err != nil {
 		return Job{}, err
 	}
+	if target.Engine != b.Engine {
+		return Job{}, apperr.Validation(map[string]string{"target_database_id": fmt.Sprintf(
+			"This backup was taken from a %s database and can only be restored into a %s database.", engineLabel(s.Drivers, b.Engine), engineLabel(s.Drivers, b.Engine))})
+	}
 	if in.Mode == "new" {
 		if exists, err := s.databaseExists(ctx, orgID, target.ID, in.NewDatabaseName); err == nil && exists {
 			return Job{}, apperr.Validation(map[string]string{"new_database_name": fmt.Sprintf(
@@ -200,21 +204,13 @@ func (s *Service) databaseExists(ctx context.Context, orgID, targetID, name stri
 	if err != nil {
 		return false, err
 	}
-	m, err := t.Materialize(s.WorkDir)
+	drv, err := s.Drivers.For(t)
 	if err != nil {
 		return false, err
 	}
-	defer m.Close()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	conn, err := m.Connect(ctx, "")
-	if err != nil {
-		return false, err
-	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	var exists bool
-	err = conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_database WHERE lower(datname) = lower($1))`, name).Scan(&exists)
-	return exists, err
+	return drv.DatabaseExists(ctx, t, name)
 }
 
 func isUUID(s string) bool {
@@ -289,107 +285,28 @@ func (s *Service) fetch(ctx context.Context, b backups.Backup, log *jobs.Logger)
 	return src, nil
 }
 
-// tables lists the ordinary tables in an archive.
-func (s *Service) tables(ctx context.Context, src archiveSource) ([]pgtools.TOCEntry, error) {
+// tables lists the tables contained in an archive.
+func tables(ctx context.Context, drv engine.Driver, src archiveSource) ([]engine.Table, error) {
 	rc, err := src.open()
 	if err != nil {
 		return nil, err
 	}
 	defer rc.Close()
-	entries, err := s.Tools.ListArchive(ctx, rc)
-	if err != nil {
-		return nil, err
-	}
-	var out []pgtools.TOCEntry
-	for _, e := range entries {
-		if e.Type == "TABLE" {
-			out = append(out, e)
-		}
-	}
-	return out, nil
+	return drv.Tables(ctx, rc)
 }
 
-// runRestore pipes the archive into pg_restore.
-func (s *Service) runRestore(ctx context.Context, src archiveSource, m *database.Materialized, dbName string, opts pgtools.RestoreOptions) error {
+// runRestore streams the archive into the engine's restore tool.
+func runRestore(ctx context.Context, drv engine.Driver, src archiveSource, t engine.Target, dbName string, o engine.RestoreOptions, log engine.Logger) error {
 	rc, err := src.open()
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
-	if err := s.describeTarget(ctx, m, dbName, &opts); err != nil {
-		return err
-	}
-	proc, err := s.Tools.StartRestore(ctx, m.Env(dbName), opts, rc)
-	if err != nil {
-		return err
-	}
-	if err := proc.Wait(); err != nil {
-		return fmt.Errorf("pg_restore failed: %w", err)
-	}
-	return nil
-}
-
-func (s *Service) serverMajor(ctx context.Context, m *database.Materialized, dbName string) (int, error) {
-	var o pgtools.RestoreOptions
-	err := s.describeTarget(ctx, m, dbName, &o)
-	return o.ServerMajor, err
-}
-
-// describeTarget records the target server's version and settings so
-// pg_restore output can be adapted to older servers.
-func (s *Service) describeTarget(ctx context.Context, m *database.Materialized, dbName string, opts *pgtools.RestoreOptions) error {
-	conn, err := m.Connect(ctx, dbName)
-	if err != nil {
-		return err
-	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	var names []string
-	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int / 10000, array_agg(name) FROM pg_catalog.pg_settings`).
-		Scan(&opts.ServerMajor, &names); err != nil {
-		return database.FriendlyError(err)
-	}
-	opts.ServerSettings = make(map[string]bool, len(names))
-	for _, n := range names {
-		opts.ServerSettings[n] = true
-	}
-	return nil
+	return drv.Restore(ctx, t, dbName, rc, o, log)
 }
 
 // TableCheck is the result of checking restored tables.
-type TableCheck struct {
-	Expected int      `json:"tables_expected"`
-	Found    int      `json:"tables_found"`
-	Rows     int64    `json:"rows"`
-	Missing  []string `json:"missing,omitempty"`
-}
-
-// checkTables confirms every table from the archive exists (and, when
-// countRows is set, is readable) in the restored database.
-func checkTables(ctx context.Context, conn *pgx.Conn, tables []pgtools.TOCEntry, countRows bool) (TableCheck, error) {
-	res := TableCheck{Expected: len(tables)}
-	if _, err := conn.Exec(ctx, "SET statement_timeout = '5min'"); err != nil {
-		return res, err
-	}
-	for _, t := range tables {
-		var exists bool
-		if err := conn.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = $1 AND tablename = $2)`, t.Schema, t.Name).Scan(&exists); err != nil {
-			return res, err
-		}
-		if !exists {
-			res.Missing = append(res.Missing, t.Schema+"."+t.Name)
-			continue
-		}
-		res.Found++
-		if countRows {
-			var n int64
-			if err := conn.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{t.Schema, t.Name}.Sanitize()).Scan(&n); err != nil {
-				return res, fmt.Errorf("query %s.%s: %w", t.Schema, t.Name, err)
-			}
-			res.Rows += n
-		}
-	}
-	return res, nil
-}
+type TableCheck = engine.TableCheck
 
 type restorePayload struct {
 	RestoreID string `json:"restore_id"`
@@ -453,7 +370,14 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	if err != nil {
 		return TableCheck{}, err
 	}
-	if _, err := s.Tools.CheckCompatible(ctx, "pg_restore", 0); err != nil {
+	drv, err := s.Drivers.For(target)
+	if err != nil {
+		return TableCheck{}, err
+	}
+	if b.Engine != drv.Name() {
+		return TableCheck{}, fmt.Errorf("a %s backup can't be restored into a %s database", b.Engine, drv.Label())
+	}
+	if err := drv.CheckRestoreTool(ctx); err != nil {
 		return TableCheck{}, err
 	}
 	src, err := s.fetch(ctx, b, log)
@@ -462,61 +386,39 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	}
 	defer os.Remove(src.path)
 
-	tables, err := s.tables(ctx, src)
+	tbls, err := tables(ctx, drv, src)
 	if err != nil {
 		return TableCheck{}, err
 	}
-	log.Infof("Backup contains %d tables", len(tables))
-
-	m, err := target.Materialize(s.WorkDir)
-	if err != nil {
-		return TableCheck{}, err
-	}
-	defer m.Close()
+	log.Infof("Backup contains %d tables", len(tbls))
 
 	dbName := target.Database
-	opts := pgtools.RestoreOptions{SingleTransaction: true}
+	opts := engine.RestoreOptions{Atomic: true}
 	createdDB := false
 	if r.Mode == "new" {
 		dbName = *r.NewDatabaseName
 		log.Infof("Creating database %q on %s:%d", dbName, target.Host, target.Port)
-		conn, err := m.Connect(ctx, "")
-		if err != nil {
+		if err := drv.CreateDatabase(ctx, target, dbName); err != nil {
 			return TableCheck{}, err
-		}
-		_, err = conn.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{dbName}.Sanitize())
-		conn.Close(context.WithoutCancel(ctx))
-		if err != nil {
-			return TableCheck{}, fmt.Errorf("create database %s: %w", dbName, database.FriendlyError(err))
 		}
 		createdDB = true
 	} else {
-		opts.Clean = true
+		opts.Overwrite = true
 		log.Warnf("Restoring over existing database %q: existing objects contained in the backup are dropped and recreated", dbName)
 	}
 
-	log.Infof("Running pg_restore into %q (single transaction: all-or-nothing)", dbName)
-	if major, err := s.serverMajor(ctx, m, dbName); err == nil {
-		if compat, client := s.Tools.NeedsCompat(ctx, major); compat {
-			log.Infof("Target runs PostgreSQL %d; adapting pg_restore %d output for compatibility", major, client)
-		}
-	}
-	if err := s.runRestore(ctx, src, m, dbName, opts); err != nil {
+	log.Infof("Running %s restore into %q (single transaction: all-or-nothing)", drv.Label(), dbName)
+	if err := runRestore(ctx, drv, src, target, dbName, opts, log); err != nil {
 		if createdDB {
-			s.dropCreated(m, dbName, log)
+			dropCreated(drv, target, dbName, log)
 		}
 		return TableCheck{}, err
 	}
-	log.Infof("pg_restore completed")
+	log.Infof("Restore tool completed")
 
 	_, _ = s.Pool.Exec(ctx, `UPDATE restore_jobs SET status = 'verifying' WHERE id = $1`, r.ID)
 	log.Infof("Verifying restored database")
-	conn, err := m.Connect(ctx, dbName)
-	if err != nil {
-		return TableCheck{}, err
-	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	check, err := checkTables(ctx, conn, tables, false)
+	check, err := drv.CheckTables(ctx, target, dbName, tbls, false)
 	if err != nil {
 		return check, err
 	}
@@ -527,16 +429,10 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	return check, nil
 }
 
-func (s *Service) dropCreated(m *database.Materialized, name string, log *jobs.Logger) {
+func dropCreated(drv engine.Driver, t engine.Target, name string, log *jobs.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	conn, err := m.Connect(ctx, "")
-	if err != nil {
-		log.Warnf("Could not remove partially created database %q: %v", name, err)
-		return
-	}
-	defer conn.Close(ctx)
-	if _, err := conn.Exec(ctx, "DROP DATABASE IF EXISTS "+pgx.Identifier{name}.Sanitize()); err != nil {
+	if err := drv.DropDatabase(ctx, t, name); err != nil {
 		log.Warnf("Could not remove partially created database %q: %v", name, err)
 		return
 	}
@@ -678,13 +574,18 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 	rep.Integrity = Check{Status: CheckPass, Message: "SHA-256 matches the value recorded at backup time (" + (*b.Checksum)[:16] + "…)"}
 
 	// 3-4. Decrypt + decompress while reading the archive's table of contents.
-	tables, err := s.tables(ctx, src)
+	drv, err := s.Drivers.Get(b.Engine)
+	if err != nil {
+		rep.Integrity = Check{Status: CheckFail, Message: err.Error()}
+		return finish()
+	}
+	tbls, err := tables(ctx, drv, src)
 	if err != nil {
 		rep.Integrity = Check{Status: CheckFail, Message: "Archive could not be decrypted or read: " + err.Error()}
 		return finish()
 	}
-	rep.TablesExpected = len(tables)
-	log.Infof("Archive decrypted and decompressed; %d tables in table of contents", len(tables))
+	rep.TablesExpected = len(tbls)
+	log.Infof("Archive decrypted and decompressed; %d tables in table of contents", len(tbls))
 
 	if s.Sandbox == nil {
 		msg := UnavailableMessage
@@ -704,13 +605,13 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		return finish()
 	}
 
-	// 5. Provision a disposable PostgreSQL.
+	// 5. Provision a disposable database of the backup's engine.
 	major := 0
 	if b.PGVersion != nil {
 		major, _ = strconv.Atoi(strings.SplitN(*b.PGVersion, ".", 2)[0])
 	}
-	log.Infof("Starting restore sandbox (%s, PostgreSQL %d)", s.Sandbox.Name(), major)
-	inst, err := s.Sandbox.Provision(ctx, major)
+	log.Infof("Starting restore sandbox (%s, %s %d)", s.Sandbox.Name(), drv.Label(), major)
+	inst, err := s.Sandbox.Provision(ctx, drv, major)
 	if err != nil {
 		rep.Restore = Check{Status: CheckFail, Message: "Could not start the restore sandbox: " + err.Error()}
 		return finish()
@@ -726,31 +627,18 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 	}()
 	log.Infof("Sandbox ready: %s", inst.Description)
 
-	m, err := inst.Target.Materialize(s.WorkDir)
-	if err != nil {
-		rep.Restore = Check{Status: CheckFail, Message: err.Error()}
-		return finish()
-	}
-	defer m.Close()
-
 	// 6. Restore.
 	restoreStart := time.Now()
 	log.Infof("Restoring backup into sandbox")
-	if err := s.runRestore(ctx, src, m, inst.DBName, pgtools.RestoreOptions{SingleTransaction: true}); err != nil {
+	if err := runRestore(ctx, drv, src, inst.Target, inst.DBName, engine.RestoreOptions{Atomic: true}, log); err != nil {
 		rep.Restore = Check{Status: CheckFail, Message: err.Error()}
 		return finish()
 	}
-	rep.Restore = Check{Status: CheckPass, Message: "pg_restore completed without errors in " + time.Since(restoreStart).Round(time.Second).String()}
+	rep.Restore = Check{Status: CheckPass, Message: "Restore completed without errors in " + time.Since(restoreStart).Round(time.Second).String()}
 	log.Infof("Restore into sandbox completed")
 
 	// 7. Verification queries.
-	conn, err := m.Connect(ctx, inst.DBName)
-	if err != nil {
-		rep.Database = Check{Status: CheckFail, Message: err.Error()}
-		return finish()
-	}
-	defer conn.Close(context.WithoutCancel(ctx))
-	check, err := checkTables(ctx, conn, tables, true)
+	check, err := drv.CheckTables(ctx, inst.Target, inst.DBName, tbls, true)
 	rep.TablesRestored, rep.Rows = check.Found, check.Rows
 	switch {
 	case err != nil:
@@ -761,4 +649,13 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		rep.Database = Check{Status: CheckPass, Message: fmt.Sprintf("%d of %d tables restored and queryable, %d rows counted", check.Found, check.Expected, check.Rows)}
 	}
 	return finish()
+}
+
+func engineLabel(r *engine.Registry, name string) string {
+	if r != nil {
+		if d, err := r.Get(name); err == nil {
+			return d.Label()
+		}
+	}
+	return name
 }

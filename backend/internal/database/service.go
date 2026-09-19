@@ -13,6 +13,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/audit"
 	"github.com/dbvault/dbvault/backend/internal/db"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/validate"
 )
 
@@ -22,6 +23,7 @@ type Database struct {
 	ID             string     `json:"id"`
 	OrganizationID string     `json:"organization_id"`
 	Name           string     `json:"name"`
+	Engine         string     `json:"engine"`
 	Host           string     `json:"host"`
 	Port           int        `json:"port"`
 	DatabaseName   string     `json:"database"`
@@ -59,6 +61,7 @@ type Health struct {
 }
 
 type Service struct {
+	Drivers *engine.Registry
 	Pool    *pgxpool.Pool
 	Sealer  *encryption.Sealer
 	WorkDir string
@@ -66,7 +69,7 @@ type Service struct {
 
 func passwordAAD(id string) string { return "database:" + id + ":password" }
 
-const selectDatabase = `SELECT d.id, d.organization_id, d.name, d.host, d.port, d.database_name, d.username, d.ssl_mode,
+const selectDatabase = `SELECT d.id, d.organization_id, d.name, d.engine, d.host, d.port, d.database_name, d.username, d.ssl_mode,
 	d.ssl_root_cert IS NOT NULL AND d.ssl_root_cert <> '', d.pg_version, d.size_bytes, d.last_tested_at, d.last_test_ok, d.last_test_error,
 	d.created_at, d.updated_at,
 	EXISTS (SELECT 1 FROM backup_schedules s WHERE s.database_id = d.id AND s.enabled),
@@ -82,7 +85,7 @@ const selectDatabase = `SELECT d.id, d.organization_id, d.name, d.host, d.port, 
 
 func scanDatabase(row pgx.Row) (Database, error) {
 	var d Database
-	err := row.Scan(&d.ID, &d.OrganizationID, &d.Name, &d.Host, &d.Port, &d.DatabaseName, &d.Username, &d.SSLMode, &d.HasSSLRootCert,
+	err := row.Scan(&d.ID, &d.OrganizationID, &d.Name, &d.Engine, &d.Host, &d.Port, &d.DatabaseName, &d.Username, &d.SSLMode, &d.HasSSLRootCert,
 		&d.PGVersion, &d.SizeBytes, &d.LastTestedAt, &d.LastTestOK, &d.LastTestError, &d.CreatedAt, &d.UpdatedAt,
 		&d.Protected, &d.ScheduleCount, &d.BackupCount, &d.LastBackupAt, &d.LastBackupState, &d.LastSuccessAt, &d.NextRunAt, &d.StorageBytes)
 	return d, err
@@ -161,23 +164,30 @@ type Input struct {
 	Username     string  `json:"username"`
 	Password     *string `json:"password"`
 	SSLMode      string  `json:"ssl_mode"`
-	SSLRootCert  *string `json:"ssl_root_cert"`
+	// Engine is the database type ("postgres"); empty means PostgreSQL.
+	Engine      string  `json:"engine"`
+	SSLRootCert *string `json:"ssl_root_cert"`
 }
 
-// SSLModes are the libpq sslmode values we accept.
-var SSLModes = []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
-
-// Validate checks an input; requirePassword is true on create.
-func (in *Input) Validate(requirePassword bool) error {
+// Validate checks an input against the engine's rules; requirePassword is
+// true on create.
+func (in *Input) Validate(drivers *engine.Registry, requirePassword bool) error {
 	in.Name = strings.TrimSpace(in.Name)
 	in.Host = strings.TrimSpace(in.Host)
 	in.DatabaseName = strings.TrimSpace(in.DatabaseName)
 	in.Username = strings.TrimSpace(in.Username)
+	if in.Engine == "" {
+		in.Engine = engine.Postgres
+	}
+	drv, err := drivers.Get(in.Engine)
+	if err != nil {
+		return apperr.Validation(map[string]string{"engine": "Unsupported database type."})
+	}
 	if in.SSLMode == "" {
-		in.SSLMode = "prefer"
+		in.SSLMode = drv.DefaultSSLMode()
 	}
 	if in.Port == 0 {
-		in.Port = 5432
+		in.Port = drv.DefaultPort()
 	}
 	v := validate.New()
 	v.Required("name", in.Name)
@@ -198,7 +208,7 @@ func (in *Input) Validate(requirePassword bool) error {
 	if in.Password != nil {
 		v.MaxLen("password", *in.Password, 1024)
 	}
-	v.OneOf("ssl_mode", in.SSLMode, SSLModes...)
+	v.OneOf("ssl_mode", in.SSLMode, drv.SSLModes()...)
 	if in.SSLRootCert != nil && *in.SSLRootCert != "" {
 		v.Check(strings.Contains(*in.SSLRootCert, "BEGIN CERTIFICATE"), "ssl_root_cert", "Must be a PEM-encoded certificate.")
 		v.MaxLen("ssl_root_cert", *in.SSLRootCert, 64<<10)
@@ -208,7 +218,7 @@ func (in *Input) Validate(requirePassword bool) error {
 
 // Target builds a connection target from an input (for unsaved tests).
 func (in Input) Target() Target {
-	t := Target{Host: in.Host, Port: in.Port, Database: in.DatabaseName, Username: in.Username, SSLMode: in.SSLMode}
+	t := Target{Engine: in.Engine, Host: in.Host, Port: in.Port, Database: in.DatabaseName, Username: in.Username, SSLMode: in.SSLMode}
 	if in.Password != nil {
 		t.Password = *in.Password
 	}
@@ -226,9 +236,9 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in Input) (D
 		return Database{}, err
 	}
 	err = db.WithTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO databases (id, organization_id, name, host, port, database_name, username, password_encrypted, ssl_mode, ssl_root_cert, created_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11)`,
-			id, orgID, in.Name, in.Host, in.Port, in.DatabaseName, in.Username, sealed, in.SSLMode, deref(in.SSLRootCert), userID)
+		_, err := tx.Exec(ctx, `INSERT INTO databases (id, organization_id, name, engine, host, port, database_name, username, password_encrypted, ssl_mode, ssl_root_cert, created_by)
+			VALUES ($1, $2, $3, $12, $4, $5, $6, $7, $8, $9, NULLIF($10, ''), $11)`,
+			id, orgID, in.Name, in.Host, in.Port, in.DatabaseName, in.Username, sealed, in.SSLMode, deref(in.SSLRootCert), userID, in.Engine)
 		if db.IsUniqueViolation(err) {
 			return apperr.Validation(map[string]string{"name": "A database with this name already exists."})
 		}
@@ -305,9 +315,9 @@ func (s *Service) Target(ctx context.Context, orgID, id string) (Target, error) 
 	var t Target
 	var sealed string
 	var cert *string
-	err := s.Pool.QueryRow(ctx, `SELECT host, port, database_name, username, password_encrypted, ssl_mode, ssl_root_cert
+	err := s.Pool.QueryRow(ctx, `SELECT engine, host, port, database_name, username, password_encrypted, ssl_mode, ssl_root_cert
 		FROM databases WHERE id = $1 AND organization_id = $2`, id, orgID).
-		Scan(&t.Host, &t.Port, &t.Database, &t.Username, &sealed, &t.SSLMode, &cert)
+		Scan(&t.Engine, &t.Host, &t.Port, &t.Database, &t.Username, &sealed, &t.SSLMode, &cert)
 	if db.IsNotFound(err) {
 		return t, apperr.NotFound("Database")
 	}
@@ -330,13 +340,12 @@ type TestResult struct {
 // TestTarget connects to t and reports the result (never an error for
 // connection failures: those are part of the result).
 func (s *Service) TestTarget(ctx context.Context, t Target) (TestResult, error) {
-	m, err := t.Materialize(s.WorkDir)
+	drv, err := s.Drivers.For(t)
 	if err != nil {
 		return TestResult{}, err
 	}
-	defer m.Close()
 	res := TestResult{TestedAt: time.Now()}
-	info, err := m.Inspect(ctx)
+	info, err := drv.Inspect(ctx, t)
 	if err != nil {
 		res.Message = err.Error()
 		return res, nil

@@ -17,6 +17,8 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/database"
 	"github.com/dbvault/dbvault/backend/internal/db"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
+	"github.com/dbvault/dbvault/backend/internal/engine"
+	"github.com/dbvault/dbvault/backend/internal/engine/postgres"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
 	"github.com/dbvault/dbvault/backend/internal/organizations"
@@ -49,6 +51,8 @@ type App struct {
 	Restores      *restore.Service
 	Schedules     *scheduler.Service
 	Tools         pgtools.Tools
+	Postgres      *postgres.Driver
+	Drivers       *engine.Registry
 }
 
 // Role selects startup behaviour.
@@ -100,12 +104,14 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 	a.Limiter = ratelimit.New(rdb)
 	a.Mailer = notifications.NewSMTPMailer(cfg.SMTP)
 	a.Tools = pgtools.Tools{BinDir: cfg.PgBinDir}
+	a.Postgres = postgres.New(a.Tools, cfg.WorkDir)
+	a.Drivers = engine.NewRegistry(a.Postgres)
 	hasher := auth.NewHasher(cfg.AuthSecret)
 
 	a.Organizations = &organizations.Service{Pool: pool, Keys: a.Keys, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL}
 	a.Auth = &auth.Service{Pool: pool, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL, AllowRegistration: cfg.AllowRegistration,
 		CreateOrg: a.Organizations.CreatePersonal}
-	a.Databases = &database.Service{Pool: pool, Sealer: sealer, WorkDir: cfg.WorkDir}
+	a.Databases = &database.Service{Pool: pool, Sealer: sealer, WorkDir: cfg.WorkDir, Drivers: a.Drivers}
 	a.Destinations = &storage.DestinationService{Pool: pool, Sealer: sealer, Options: storage.Options{LocalRoot: cfg.LocalStorageRoot}, Builtin: cfg.S3}
 	a.Notifications = &notifications.Service{Pool: pool, Sealer: sealer, Queue: a.Queue, AppURL: cfg.AppURL, EmailConfigured: a.Mailer.Configured(),
 		Senders: map[string]notifications.Sender{
@@ -114,9 +120,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 		}}
 	a.Backups = &backups.Service{Pool: pool, Queue: a.Queue, Databases: a.Databases, Destinations: a.Destinations, Keys: a.Keys,
 		Notify: a.Notifications, AppURL: cfg.AppURL, WorkDir: cfg.WorkDir,
-		Engine: &backups.Engine{Tools: a.Tools, WorkDir: cfg.WorkDir, VerifyUpload: cfg.VerifyUploadedData}}
+		Engine: &backups.Engine{Drivers: a.Drivers, VerifyUpload: cfg.VerifyUploadedData}}
 	a.Restores = &restore.Service{Pool: pool, Queue: a.Queue, Backups: a.Backups, Databases: a.Databases, Destinations: a.Destinations,
-		Keys: a.Keys, Notify: a.Notifications, Tools: a.Tools, WorkDir: cfg.WorkDir, AppURL: cfg.AppURL}
+		Keys: a.Keys, Notify: a.Notifications, Drivers: a.Drivers, WorkDir: cfg.WorkDir, AppURL: cfg.AppURL}
 	a.Schedules = &scheduler.Service{Pool: pool, Backups: a.Backups}
 	return a, nil
 }
@@ -137,7 +143,7 @@ func (a *App) ConfigureSandbox(ctx context.Context) {
 		}
 		a.Restores.Sandbox = sb
 	case config.VerifyModeServer:
-		sb, err := restore.NewServerSandbox(a.Config.VerifyPostgresURL)
+		sb, err := restore.NewServerSandbox(a.Config.VerifyPostgresURL, a.Postgres)
 		if err != nil {
 			a.Restores.SandboxUnavailableReason = err.Error()
 			return

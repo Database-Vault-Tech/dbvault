@@ -16,7 +16,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/compress"
 	"github.com/dbvault/dbvault/backend/internal/database"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
-	"github.com/dbvault/dbvault/backend/internal/pgtools"
+	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/storage"
 )
 
@@ -37,15 +37,14 @@ type Progress struct {
 
 // Engine executes the backup pipeline:
 //
-//	pg_dump (custom format) → compress → encrypt → SHA-256 → upload → verify
+//	native dump (e.g. pg_dump) → compress → encrypt → SHA-256 → upload → verify
 //
 // Every stage is a streaming io.Reader/io.Writer connected in one pass, so
 // memory use is bounded (about one upload part) no matter how large the
 // database is. Nothing is staged on local disk.
 type Engine struct {
-	Tools pgtools.Tools
-	// WorkDir holds short-lived private files (e.g. TLS CA certs).
-	WorkDir string
+	// Drivers provides the per-engine connection and dump logic.
+	Drivers *engine.Registry
 	// VerifyUpload re-reads the uploaded object and re-computes its
 	// checksum before a backup is marked completed.
 	VerifyUpload bool
@@ -81,32 +80,26 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 	log := req.Log
 	var res Result
 
-	mt, err := req.Target.Materialize(e.WorkDir)
+	drv, err := e.Drivers.For(req.Target)
 	if err != nil {
 		return res, err
 	}
-	defer mt.Close()
-
-	log.Infof("Connecting to PostgreSQL at %s:%d", req.Target.Host, req.Target.Port)
-	info, err := mt.Inspect(ctx)
+	log.Infof("Connecting to %s at %s:%d", drv.Label(), req.Target.Host, req.Target.Port)
+	info, err := drv.Inspect(ctx, req.Target)
 	if err != nil {
 		return res, fmt.Errorf("connect: %w", err)
 	}
 	res.PGVersion, res.PGMajor, res.TableCount = info.Version, info.Major, info.TableCount
-	log.Infof("Connection successful (PostgreSQL %s, %s, %d tables)", info.Version, HumanBytes(info.SizeBytes), info.TableCount)
-
-	res.PGDumpVersion, err = e.Tools.CheckCompatible(ctx, "pg_dump", info.Major)
-	if err != nil {
-		return res, err
-	}
+	log.Infof("Connection successful (%s %s, %s, %d tables)", drv.Label(), info.Version, HumanBytes(info.SizeBytes), info.TableCount)
 
 	dumpCtx, cancelDump := context.WithCancel(ctx)
 	defer cancelDump()
-	log.Infof("Starting pg_dump %s (custom format)", res.PGDumpVersion)
-	proc, stdout, err := e.Tools.StartDump(dumpCtx, mt.Env(""))
+	dump, err := drv.Dump(dumpCtx, req.Target, info)
 	if err != nil {
 		return res, err
 	}
+	res.PGDumpVersion = dump.ToolVersion
+	log.Infof("Started %s dump (tool %s)", drv.Label(), dump.ToolVersion)
 
 	var dumped, written atomic.Int64
 	pr, pw := io.Pipe()
@@ -135,7 +128,7 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 	// Producer: pg_dump stdout → compressor → encryptor → (hash, pipe).
 	producerErr := make(chan error, 1)
 	go func() {
-		producerErr <- e.produce(cancelDump, proc, stdout, sink, pw, &dumped, req)
+		producerErr <- e.produce(cancelDump, dump, sink, pw, &dumped, req)
 	}()
 
 	// Consumer: stream the pipe into storage.
@@ -169,7 +162,7 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 		_ = req.Storage.Delete(context.WithoutCancel(ctx), req.Key)
 		return res, &StorageError{Err: fmt.Errorf("storage accepted %d bytes but %d were produced", uploaded, res.SizeBytes)}
 	}
-	log.Infof("pg_dump completed (%s of dump data)", HumanBytes(res.RawSizeBytes))
+	log.Infof("Dump completed (%s of dump data)", HumanBytes(res.RawSizeBytes))
 	if req.Compression != compress.None {
 		log.Infof("Compression completed with %s (%s, %.1fx)", req.Compression, HumanBytes(res.SizeBytes), ratio(res.RawSizeBytes, res.SizeBytes))
 	}
@@ -203,12 +196,12 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 // sink, then closes pw. pg_dump's exit status is checked before the final
 // frames are flushed, so a failed dump always surfaces as an upload error
 // and is never stored as a complete (but truncated) backup.
-func (e *Engine) produce(cancel context.CancelFunc, proc *pgtools.Process, stdout io.Reader, sink io.Writer, pw *io.PipeWriter, dumped *atomic.Int64, req Request) error {
+func (e *Engine) produce(cancel context.CancelFunc, dump *engine.Dump, sink io.Writer, pw *io.PipeWriter, dumped *atomic.Int64, req Request) error {
 	var encW io.WriteCloser
 	var dst io.Writer = sink
 	fail := func(err error) error {
 		cancel()
-		_ = proc.Wait()
+		_ = dump.Wait()
 		_ = pw.CloseWithError(err)
 		return err
 	}
@@ -223,18 +216,18 @@ func (e *Engine) produce(cancel context.CancelFunc, proc *pgtools.Process, stdou
 	if err != nil {
 		return fail(err)
 	}
-	_, copyErr := io.Copy(compW, &countingReader{r: stdout, n: dumped})
+	_, copyErr := io.Copy(compW, &countingReader{r: dump.Stream, n: dumped})
 	if copyErr != nil {
 		// Downstream failed (upload aborted or cancelled); stop pg_dump.
 		cancel()
 	}
-	waitErr := proc.Wait()
+	waitErr := dump.Wait()
 	switch {
 	case copyErr != nil:
 		// We killed pg_dump ourselves, so its exit status is irrelevant.
 		err = copyErr
 	case waitErr != nil:
-		err = fmt.Errorf("pg_dump failed: %w", waitErr)
+		err = fmt.Errorf("dump failed: %w", waitErr)
 	}
 	if err != nil {
 		_ = pw.CloseWithError(err)
@@ -393,16 +386,18 @@ func HumanBytes(n int64) string {
 
 // ObjectKey builds the predictable storage key for a backup:
 //
-//	<prefix>/<database>/<YYYY>/<MM>/<DD>/backup_<YYYY-MM-DD_HH-MM-SS>.dump[.zst|.gz][.age]
+//	<prefix>/<database>/<YYYY>/<MM>/<DD>/backup_<YYYY-MM-DD_HH-MM-SS><ext>[.zst|.gz][.age]
+//
+// where ext is the engine's dump extension (".dump" for PostgreSQL).
 //
 // suffix (optional) disambiguates two backups started in the same second.
-func ObjectKey(prefix, dbName string, t time.Time, compression string, encrypted bool, suffix string) string {
+func ObjectKey(prefix, dbName string, t time.Time, ext, compression string, encrypted bool, suffix string) string {
 	t = t.UTC()
 	name := "backup_" + t.Format("2006-01-02_15-04-05")
 	if suffix != "" {
 		name += "_" + suffix
 	}
-	name += ".dump" + compress.Extension(compression)
+	name += ext + compress.Extension(compression)
 	if encrypted {
 		name += ".age"
 	}

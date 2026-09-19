@@ -27,6 +27,7 @@ type Backup struct {
 	OrganizationID       string          `json:"organization_id"`
 	DatabaseID           string          `json:"database_id"`
 	DatabaseName         string          `json:"database_name"`
+	Engine               string          `json:"engine"`
 	ScheduleID           *string         `json:"schedule_id"`
 	ScheduleName         *string         `json:"schedule_name"`
 	StorageDestinationID string          `json:"storage_destination_id"`
@@ -59,7 +60,7 @@ type Backup struct {
 	CreatedAt            time.Time       `json:"created_at"`
 }
 
-const selectBackup = `SELECT b.id, b.organization_id, b.database_id, d.name, b.schedule_id, s.name, b.storage_destination_id, sd.name, sd.type,
+const selectBackup = `SELECT b.id, b.organization_id, b.database_id, d.name, d.engine, b.schedule_id, s.name, b.storage_destination_id, sd.name, sd.type,
 	b.job_id, b.trigger, b.status, b.storage_key, b.format, b.compression, b.encrypted, b.encryption_key_id, b.size_bytes, b.raw_size_bytes,
 	b.checksum_sha256, b.pg_version, b.pg_dump_version, b.table_count, b.error, b.started_at, b.completed_at, b.duration_ms,
 	b.verification_status, b.verification, b.verified_at, b.deleted_at, b.deleted_reason, b.created_by, b.created_at
@@ -70,7 +71,7 @@ const selectBackup = `SELECT b.id, b.organization_id, b.database_id, d.name, b.s
 
 func scanBackup(row pgx.Row) (Backup, error) {
 	var b Backup
-	err := row.Scan(&b.ID, &b.OrganizationID, &b.DatabaseID, &b.DatabaseName, &b.ScheduleID, &b.ScheduleName, &b.StorageDestinationID,
+	err := row.Scan(&b.ID, &b.OrganizationID, &b.DatabaseID, &b.DatabaseName, &b.Engine, &b.ScheduleID, &b.ScheduleName, &b.StorageDestinationID,
 		&b.StorageName, &b.StorageType, &b.JobID, &b.Trigger, &b.Status, &b.StorageKey, &b.Format, &b.Compression, &b.Encrypted,
 		&b.EncryptionKeyID, &b.SizeBytes, &b.RawSizeBytes, &b.Checksum, &b.PGVersion, &b.PGDumpVersion, &b.TableCount, &b.Error,
 		&b.StartedAt, &b.CompletedAt, &b.DurationMs, &b.VerificationStatus, &b.Verification, &b.VerifiedAt, &b.DeletedAt,

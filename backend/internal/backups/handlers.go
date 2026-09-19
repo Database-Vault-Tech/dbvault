@@ -14,6 +14,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/apperr"
 	"github.com/dbvault/dbvault/backend/internal/audit"
 	"github.com/dbvault/dbvault/backend/internal/auth"
+	"github.com/dbvault/dbvault/backend/internal/compress"
 	"github.com/dbvault/dbvault/backend/internal/httpx"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/logging"
@@ -222,7 +223,7 @@ func (s *Service) handleDelete(w http.ResponseWriter, r *http.Request) {
 // handleDownload streams a backup to the client without buffering it.
 //
 //	format=raw  (default) the artifact exactly as stored (encrypted/compressed); member+
-//	format=dump decrypted and decompressed pg_dump archive for pg_restore;      admin+
+//	format=dump decrypted and decompressed native dump (e.g. for pg_restore);  admin+
 func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
 	if format == "" {
@@ -288,7 +289,8 @@ func (s *Service) handleDownload(w http.ResponseWriter, r *http.Request) {
 		}
 		defer archive.Close()
 		body = archive
-		name = strings.SplitN(name, ".dump", 2)[0] + ".dump"
+		// backup_...<ext>.zst.age -> backup_...<ext>
+		name = strings.TrimSuffix(strings.TrimSuffix(name, ".age"), compress.Extension(b.Compression))
 	} else if b.SizeBytes != nil {
 		w.Header().Set("Content-Length", strconv.FormatInt(*b.SizeBytes, 10))
 	}

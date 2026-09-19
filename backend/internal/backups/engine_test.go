@@ -8,11 +8,11 @@ import (
 
 func TestObjectKeyIsPredictable(t *testing.T) {
 	ts := time.Date(2026, 9, 19, 12, 30, 0, 0, time.UTC)
-	got := ObjectKey("", "production", ts, "zstd", false, "")
+	got := ObjectKey("", "production", ts, ".dump", "zstd", false, "")
 	if got != "production/2026/09/19/backup_2026-09-19_12-30-00.dump.zst" {
 		t.Fatalf("got %q", got)
 	}
-	got = ObjectKey("team/", "Prod DB!", ts, "gzip", true, "ab12cd34")
+	got = ObjectKey("team/", "Prod DB!", ts, ".dump", "gzip", true, "ab12cd34")
 	if got != "team/prod-db/2026/09/19/backup_2026-09-19_12-30-00_ab12cd34.dump.gz.age" {
 		t.Fatalf("got %q", got)
 	}

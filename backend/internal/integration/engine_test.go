@@ -27,11 +27,17 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/backups"
 	"github.com/dbvault/dbvault/backend/internal/database"
 	"github.com/dbvault/dbvault/backend/internal/encryption"
+	"github.com/dbvault/dbvault/backend/internal/engine"
+	"github.com/dbvault/dbvault/backend/internal/engine/postgres"
 	"github.com/dbvault/dbvault/backend/internal/pgtools"
 	"github.com/dbvault/dbvault/backend/internal/storage"
 )
 
 type logSink struct{ t *testing.T }
+
+func pgDriver(t *testing.T) *postgres.Driver { return postgres.New(pgtools.Tools{}, t.TempDir()) }
+
+func drivers(t *testing.T) *engine.Registry { return engine.NewRegistry(pgDriver(t)) }
 
 func (l logSink) Infof(f string, a ...any)  { l.t.Logf("INFO  "+f, a...) }
 func (l logSink) Warnf(f string, a ...any)  { l.t.Logf("WARN  "+f, a...) }
@@ -65,7 +71,7 @@ func adminTarget(t *testing.T) database.Target {
 
 func connect(t *testing.T, target database.Target, db string) *pgx.Conn {
 	t.Helper()
-	m, err := target.Materialize(t.TempDir())
+	m, err := postgres.Materialize(target, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,8 +160,8 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 		t.Run(compression, func(t *testing.T) {
 			target := admin
 			target.Database = src
-			eng := &backups.Engine{Tools: pgtools.Tools{}, WorkDir: t.TempDir(), VerifyUpload: true}
-			key := backups.ObjectKey("it", src, time.Now(), compression, true, compression)
+			eng := &backups.Engine{Drivers: drivers(t), VerifyUpload: true}
+			key := backups.ObjectKey("it", src, time.Now(), ".dump", compression, true, compression)
 			res, err := eng.Run(ctx, backups.Request{Target: target, Storage: st, Key: key, Compression: compression, PublicKey: pub, Log: logSink{t}})
 			if err != nil {
 				t.Fatalf("backup failed: %v", err)
@@ -181,17 +187,8 @@ func TestBackupAndRestoreRoundTrip(t *testing.T) {
 			defer archive.Close()
 
 			dst := createDB(t, admin)
-			m, err := admin.Materialize(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer m.Close()
-			proc, err := pgtools.Tools{}.StartRestore(ctx, m.Env(dst), pgtools.RestoreOptions{SingleTransaction: true}, archive)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := proc.Wait(); err != nil {
-				t.Fatalf("pg_restore: %v", err)
+			if err := pgDriver(t).Restore(ctx, admin, dst, archive, engine.RestoreOptions{Atomic: true}, logSink{t}); err != nil {
+				t.Fatalf("restore: %v", err)
 			}
 			got := counts(t, admin, dst)
 			for k, v := range want {
@@ -214,7 +211,7 @@ func TestBackupFailsWithBadCredentials(t *testing.T) {
 	st, _ := storage.NewLocal(t.TempDir(), "")
 	target := admin
 	target.Password = "definitely-wrong"
-	eng := &backups.Engine{WorkDir: t.TempDir()}
+	eng := &backups.Engine{Drivers: drivers(t)}
 	_, err := eng.Run(context.Background(), backups.Request{Target: target, Storage: st, Key: "x/backup.dump", Compression: "zstd", Log: logSink{t}})
 	if err == nil || !strings.Contains(err.Error(), "authentication failed") {
 		t.Fatalf("expected authentication error, got %v", err)
@@ -245,7 +242,7 @@ func TestBackupStorageFailureStopsPgDump(t *testing.T) {
 	target := admin
 	target.Database = src
 	local, _ := storage.NewLocal(t.TempDir(), "")
-	eng := &backups.Engine{WorkDir: t.TempDir()}
+	eng := &backups.Engine{Drivers: drivers(t)}
 	_, err := eng.Run(context.Background(), backups.Request{Target: target, Storage: failingStorage{Storage: local, after: 1024},
 		Key: "x/backup.dump", Compression: "none", Log: logSink{t}})
 	var se *backups.StorageError
@@ -267,7 +264,7 @@ func TestCorruptedBackupIsDetected(t *testing.T) {
 	target.Database = src
 	root := t.TempDir()
 	st, _ := storage.NewLocal(root, "")
-	eng := &backups.Engine{WorkDir: t.TempDir(), VerifyUpload: true}
+	eng := &backups.Engine{Drivers: drivers(t), VerifyUpload: true}
 	res, err := eng.Run(context.Background(), backups.Request{Target: target, Storage: st, Key: "x/backup.dump.zst", Compression: "zstd", Log: logSink{t}})
 	if err != nil {
 		t.Fatal(err)
