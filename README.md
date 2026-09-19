@@ -2,10 +2,10 @@
 
 # DBVault
 
-**Open-source PostgreSQL backup infrastructure.**
+**Open-source backup infrastructure for SQL databases.**
 
-Automated, encrypted, restore-tested PostgreSQL backups with a clean dashboard, a CLI and a
-one-command self-hosted install.
+Automated, encrypted, restore-tested backups of PostgreSQL, MySQL and MariaDB with a clean
+dashboard, a CLI and a one-command self-hosted install.
 
 [Quick start](#quick-start) · [Features](#features) · [Architecture](#architecture) · [CLI](#cli) · [Docs](docs/) · [Security](#security)
 
@@ -13,10 +13,11 @@ one-command self-hosted install.
 
 ---
 
-A backup you haven't restored is just a hope. DBVault runs `pg_dump` on a schedule, streams
-the dump through compression and encryption into the storage you already use (Amazon S3,
-Cloudflare R2, MinIO or local disk), verifies every upload with SHA-256, and can **prove**
-a backup restores by restoring it into a disposable PostgreSQL sandbox and querying it.
+A backup you haven't restored is just a hope. DBVault runs each engine's native dump tool
+(`pg_dump`, `mariadb-dump`) on a schedule, streams the dump through compression and
+encryption into the storage you already use (Amazon S3, Cloudflare R2, MinIO or local disk),
+verifies every upload with SHA-256, and can **prove** a backup restores by restoring it into
+a disposable sandbox of the same engine and querying it.
 
 ```console
 $ dbvault backup production
@@ -24,7 +25,7 @@ $ dbvault backup production
 Starting backup...
 
 Database:    production
-PostgreSQL:  17
+Server:      PostgreSQL 17
 Destination: s3-eu (S3)
 
 Uploading...
@@ -41,13 +42,14 @@ Checksum: 9f2c4e1a…
 
 | | |
 |---|---|
-| **Automated backups** | `pg_dump` (custom format) streamed through zstd/gzip → encryption → SHA-256 → upload in one pass. Memory stays bounded (≈60 MB for a 350 MB database). |
+| **Databases** | PostgreSQL 9.2 – 18, MySQL 5.7 – 9 and MariaDB 10 – 11, each with native dump tooling. SQL Server and SQLite are planned. See [docs/engines.md](docs/engines.md). |
+| **Automated backups** | `pg_dump` (custom format) or `mariadb-dump` streamed through zstd/gzip → encryption → SHA-256 → upload in one pass. Memory stays bounded (≈60 MB for a 350 MB database). |
 | **Schedules** | Hourly, every 6 hours, daily, weekly or any cron expression, in any timezone. Runs server-side; duplicate runs are impossible by design. |
 | **S3 / R2 / MinIO / disk** | One storage abstraction over the S3 API (multipart, adaptive part sizes, aborted on failure) plus a sandboxed local filesystem backend. |
 | **Encryption** | Backups are encrypted with [age](https://age-encryption.org) (X25519 + ChaCha20-Poly1305) using a per-organization key. Secrets at rest use AES-256-GCM. No custom crypto. |
 | **Checksums** | SHA-256 of every stored artifact, re-verified by reading the object back after upload, and again before every restore. |
-| **Restore verification** | Download → checksum → decrypt → decompress → restore into a temporary PostgreSQL (Docker container or sandbox server) → query every table → destroy. Honest when unavailable. |
-| **Restore** | Into a new database, or over an existing one (type `RESTORE` to confirm). Single transaction: all-or-nothing. |
+| **Restore verification** | Download → checksum → decrypt → decompress → restore into a temporary database of the same engine (Docker container or sandbox server) → query every table → destroy. Honest when unavailable. |
+| **Restore** | Into a new database, or over an existing one (type `RESTORE` to confirm). PostgreSQL restores run in a single transaction (all-or-nothing); MySQL/MariaDB can't, and the wizard says so. |
 | **Retention** | Grandfather-father-son policies (daily / weekly / monthly) with a preview of exactly what will be kept and deleted. |
 | **Notifications** | Email and HMAC-signed webhooks for failures, successes, restores and storage problems. Slack/Discord-ready sender interface. |
 | **Teams & audit log** | Organizations, owner/admin/member/viewer roles, invitations, and an append-only audit log of every sensitive action. |
@@ -66,16 +68,17 @@ docker compose up -d
 
 Open **http://localhost:3000**, create an account, and follow the checklist on the dashboard:
 
-1. **Add a database**: host, port, credentials, SSL mode. Click *Test Connection* to see the
-   PostgreSQL version before saving.
+1. **Add a database**: pick PostgreSQL, MySQL or MariaDB, then host, port, credentials and
+   SSL mode. Click *Test Connection* to see the server version before saving.
 2. **Add storage**: one click for the bundled MinIO, or your own S3 / R2 / MinIO bucket.
 3. **Create a schedule**: frequency, retention, compression, encryption and optional
    automatic restore tests.
-4. **Run a backup**: watch pg_dump, compression, encryption, upload and checksum
+4. **Run a backup**: watch the dump, compression, encryption, upload and checksum
    verification live.
 
-Want sample data to try it on? Start the demo database too and add it with host
-`sample-postgres`, database `shop`, user `shop`, password `shop-password`:
+Want sample data to try it on? Start the demo databases too and add one with host
+`sample-postgres`, `sample-mysql` or `sample-mariadb`, database `shop`, user `shop`,
+password `shop-password`:
 
 ```bash
 docker compose -f docker-compose.yml -f docker/e2e.yml up -d
@@ -165,6 +168,8 @@ Everything is configured with environment variables; every one is documented in
 | `DATABASE_URL`, `REDIS_URL` | DBVault's own PostgreSQL and Redis (set automatically in compose). |
 | `S3_*` | The built-in MinIO bucket offered as one-click storage. |
 | `VERIFY_MODE` | `server` (default), `docker` or `disabled` — how restore tests run. |
+| `VERIFY_POSTGRES_URL`, `VERIFY_MYSQL_URL`, `VERIFY_MARIADB_URL` | Verification servers per engine for `VERIFY_MODE=server` (set in compose). |
+| `PG_BIN_DIR`, `MYSQL_BIN_DIR` | Where the worker finds `pg_dump`/`pg_restore` and `mariadb-dump`/`mariadb` when they're not on `PATH`. |
 | `SMTP_*` | Email for notifications, invitations and password resets (Mailpit locally). |
 | `WORKER_CONCURRENCY` | Parallel jobs per worker. |
 | `ALLOW_REGISTRATION` | Turn off open sign-up after creating the first account. |
@@ -253,7 +258,7 @@ privately: [SECURITY.md](SECURITY.md).
 
 ```bash
 ./scripts/setup.sh
-docker compose up -d postgres redis minio minio-init verify-postgres mailpit
+docker compose up -d postgres redis minio minio-init verify-postgres verify-mysql verify-mariadb mailpit
 # terminal 1-3: backend processes (see docs/development.md for the env to export)
 cd backend && go run ./cmd/api
 cd backend && go run ./cmd/worker
@@ -269,7 +274,7 @@ Full guide, including running against your own PostgreSQL: [docs/development.md]
 | Suite | Command |
 |---|---|
 | Backend unit tests | `cd backend && go test ./...` |
-| Backend integration (real PostgreSQL, Redis, MinIO, pg_dump) | `./scripts/test-integration.sh` |
+| Backend integration (real PostgreSQL, MySQL, MariaDB, Redis, MinIO and dump tools) | `./scripts/test-integration.sh` |
 | CLI | `cd cli && go test ./...` |
 | Frontend unit/component tests | `cd frontend && npm test` |
 | Lint & types | `go vet ./...`, `npm run lint`, `npm run typecheck` |
@@ -286,7 +291,8 @@ verify → restore → backup history.
 
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and our
 [Code of Conduct](CODE_OF_CONDUCT.md). Good first areas: new storage providers, Slack and
-Discord notification senders, and more PostgreSQL version coverage in CI.
+Discord notification senders, more database version coverage in CI, and new engine drivers
+(SQL Server, SQLite) — see [docs/engines.md](docs/engines.md).
 
 ## Roadmap
 

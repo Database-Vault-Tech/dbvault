@@ -50,7 +50,7 @@ Run each process in its own terminal:
 ```bash
 cd backend
 go run ./cmd/api          # applies migrations, serves :8080
-go run ./cmd/worker       # needs pg_dump/pg_restore on PATH (or PG_BIN_DIR)
+go run ./cmd/worker       # needs pg_dump/pg_restore (or PG_BIN_DIR) and mariadb-dump/mariadb (or MYSQL_BIN_DIR) on PATH
 go run ./cmd/scheduler
 ```
 

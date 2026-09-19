@@ -81,8 +81,8 @@ notifications.
 
 | Mode | How it works | Requirements |
 |---|---|---|
-| `server` (Compose default) | Creates `dbvault_verify_<random>` on a dedicated PostgreSQL (`VERIFY_POSTGRES_URL`, the bundled `verify-postgres` service), then drops it `WITH (FORCE)`. | A PostgreSQL 13+ server that holds nothing else, at least as new as your backups' server versions. |
-| `docker` | Starts `postgres:<major>-alpine` matching each backup's major version (`VERIFY_DOCKER_IMAGE`), restores into it, removes the container and its volumes. Stale containers from crashed workers are cleaned up on start. | Access to the Docker socket (`docker-compose.verify-docker.yml`). Root-equivalent: use on dedicated hosts only. |
+| `server` (Compose default) | Creates `dbvault_verify_<random>` on a dedicated server for the backup's engine (`VERIFY_POSTGRES_URL`, `VERIFY_MYSQL_URL`, `VERIFY_MARIADB_URL`: the bundled `verify-postgres`, `verify-mysql` and `verify-mariadb` services), then drops it. | Servers that hold nothing else, at least as new as your backups' server versions. Engines without a URL report restore testing as unavailable. |
+| `docker` | Starts a container matching each backup's engine and major version (`postgres:<major>-alpine`, overridable with `VERIFY_DOCKER_IMAGE`; `mysql:<major>`; `mariadb:<major>`), restores into it, removes the container and its volumes. Stale containers from crashed workers are cleaned up on start. | Access to the Docker socket (`docker-compose.verify-docker.yml`). Root-equivalent: use on dedicated hosts only. |
 | `disabled` | Integrity checks (checksum, decryption, archive readability) still run. | — |
 
 When restore testing can't run (mode disabled, Docker unreachable, sandbox server too old),

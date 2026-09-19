@@ -1,7 +1,9 @@
 # Backup engine
 
-The backup engine (`backend/internal/backups/engine.go`) turns a PostgreSQL database into
-an encrypted, checksummed object in storage, in one streaming pass.
+The backup engine (`backend/internal/backups/engine.go`) turns a database into an encrypted,
+checksummed object in storage, in one streaming pass. The dump itself comes from the
+database's engine driver (see [engines.md](engines.md)); this page uses PostgreSQL as the
+example, and MySQL/MariaDB follow the same pipeline with `mariadb-dump`.
 
 ```mermaid
 flowchart LR
