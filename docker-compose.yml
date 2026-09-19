@@ -1,0 +1,233 @@
+# DBVault — self-hosted PostgreSQL backups.
+#
+#   cp .env.example .env      # or ./scripts/setup.sh to generate strong secrets
+#   docker compose up -d
+#   open http://localhost:3000
+#
+# Only the web app is published by default. The API, PostgreSQL and Redis
+# stay on the internal network; the MinIO console and Mailpit UI are bound
+# to localhost for local development.
+
+name: dbvault
+
+x-backend-env: &backend-env
+  DBVAULT_ENV: ${DBVAULT_ENV:-production}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  APP_URL: ${APP_URL:-http://localhost:3000}
+  COOKIE_SECURE: ${COOKIE_SECURE:-}
+  ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  DATABASE_URL: postgres://${POSTGRES_USER:-dbvault}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dbvault}?sslmode=disable
+  REDIS_URL: redis://redis:6379/0
+  # Secrets: taken from .env when set, otherwise generated once and stored
+  # on the dbvault-secrets volume. BACK UP ENCRYPTION_KEY.
+  AUTH_SECRET: ${AUTH_SECRET:-}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  DBVAULT_SECRETS_FILE: /var/lib/dbvault/secrets/secrets.env
+  AUTO_GENERATE_SECRETS: "true"
+  # Built-in S3-compatible storage (MinIO below).
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:9001}
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_BUCKET: ${S3_BUCKET:-dbvault-backups}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+  S3_FORCE_PATH_STYLE: "true"
+  LOCAL_STORAGE_ROOT: /var/lib/dbvault/backups
+  # Email (Mailpit catches everything locally: http://localhost:8025).
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_FROM: ${SMTP_FROM:-DBVault <dbvault@localhost>}
+  SMTP_TLS: ${SMTP_TLS:-none}
+  ALLOW_PRIVATE_NETWORK_TARGETS: ${ALLOW_PRIVATE_NETWORK_TARGETS:-true}
+  RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+  RATE_LIMIT_API_PER_MINUTE: ${RATE_LIMIT_API_PER_MINUTE:-600}
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dbvault}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-dbvault}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dbvault-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+
+  # Creates the backup bucket and a least-privilege service account that
+  # can only access that bucket, then exits.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dbvault-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-dbvault-backups}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
+    entrypoint: ["/bin/sh", "/init/minio-init.sh"]
+    volumes:
+      - ./docker/minio-init.sh:/init/minio-init.sh:ro
+    restart: "no"
+
+  # Disposable PostgreSQL used only for restore tests (VERIFY_MODE=server).
+  # Each verification creates a throwaway database here and drops it after.
+  verify-postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${VERIFY_POSTGRES_PASSWORD:?set VERIFY_POSTGRES_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+
+  api:
+    build:
+      context: ./backend
+      args:
+        VERSION: ${DBVAULT_VERSION:-dev}
+    image: dbvault/backend:${DBVAULT_VERSION:-dev}
+    restart: unless-stopped
+    command: ["dbvault-api"]
+    # Lets DBVault reach databases running on this machine as
+    # host.docker.internal ("localhost" inside a container is the container).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      <<: *backend-env
+      API_ADDR: ":8080"
+      # Only the frontend proxy can reach the API, so X-Forwarded-For is trustworthy.
+      TRUST_PROXY_HEADERS: "true"
+    volumes:
+      - dbvault-secrets:/var/lib/dbvault/secrets
+      - dbvault-backups:/var/lib/dbvault/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  worker:
+    image: dbvault/backend:${DBVAULT_VERSION:-dev}
+    restart: unless-stopped
+    command: ["dbvault-worker"]
+    # Lets DBVault reach databases running on this machine as
+    # host.docker.internal ("localhost" inside a container is the container).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      <<: *backend-env
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-2}
+      WORKER_SHUTDOWN_GRACE_PERIOD: ${WORKER_SHUTDOWN_GRACE_PERIOD:-5m}
+      VERIFY_UPLOADED_DATA: ${VERIFY_UPLOADED_DATA:-true}
+      VERIFY_MODE: ${VERIFY_MODE:-server}
+      VERIFY_POSTGRES_URL: postgres://postgres:${VERIFY_POSTGRES_PASSWORD}@verify-postgres:5432/postgres?sslmode=disable
+    volumes:
+      - dbvault-secrets:/var/lib/dbvault/secrets
+      - dbvault-backups:/var/lib/dbvault/backups
+      - dbvault-work:/var/lib/dbvault/work
+    depends_on:
+      api:
+        condition: service_healthy
+      verify-postgres:
+        condition: service_healthy
+    stop_grace_period: 6m
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8081/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  scheduler:
+    image: dbvault/backend:${DBVAULT_VERSION:-dev}
+    restart: unless-stopped
+    command: ["dbvault-scheduler"]
+    environment:
+      <<: *backend-env
+    volumes:
+      - dbvault-secrets:/var/lib/dbvault/secrets
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8082/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+    image: dbvault/frontend:${DBVAULT_VERSION:-dev}
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8080
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:
+  dbvault-secrets:
+  dbvault-backups:
+  dbvault-work:
+
+networks:
+  default:
+    name: dbvault
