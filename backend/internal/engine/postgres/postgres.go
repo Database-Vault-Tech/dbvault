@@ -29,6 +29,9 @@ func (d *Driver) DefaultPort() int       { return 5432 }
 func (d *Driver) DefaultSSLMode() string { return "prefer" }
 func (d *Driver) FileExtension() string  { return ".dump" }
 func (d *Driver) Format() string         { return "pg_dump_custom" }
+func (d *Driver) Capabilities() engine.Capabilities {
+	return engine.Capabilities{AtomicRestore: true, Schemas: true}
+}
 func (d *Driver) SSLModes() []string {
 	return []string{"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
 }

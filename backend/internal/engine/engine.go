@@ -10,13 +10,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 )
 
 // Engine identifiers stored in databases.engine.
 const (
 	Postgres = "postgres"
+	MySQL    = "mysql"
+	MariaDB  = "mariadb"
 )
 
 // Target holds everything needed to connect to a database. Password is
@@ -84,6 +85,16 @@ type RestoreOptions struct {
 	Atomic bool
 }
 
+// Capabilities describes engine behaviour the API and UI must respect.
+type Capabilities struct {
+	// AtomicRestore is true when a failed restore leaves the target
+	// unchanged (PostgreSQL restores run in one transaction; MySQL DDL
+	// commits implicitly, so a failed restore can leave it half-restored).
+	AtomicRestore bool `json:"atomic_restore"`
+	// Schemas is true when tables live in named schemas within a database.
+	Schemas bool `json:"schemas"`
+}
+
 // Logger receives user-visible job log lines.
 type Logger interface {
 	Infof(format string, args ...any)
@@ -136,16 +147,23 @@ type Driver interface {
 	// Sandbox returns the container spec for restore tests of a backup taken
 	// from a server with the given major version.
 	Sandbox(major int, password string) SandboxSpec
+
+	// Capabilities describes behaviour that differs between engines.
+	Capabilities() Capabilities
 }
 
 // Registry holds the drivers available in this build.
 type Registry struct {
 	drivers map[string]Driver
+	order   []string
 }
 
 func NewRegistry(drivers ...Driver) *Registry {
 	r := &Registry{drivers: map[string]Driver{}}
 	for _, d := range drivers {
+		if _, dup := r.drivers[d.Name()]; !dup {
+			r.order = append(r.order, d.Name())
+		}
 		r.drivers[d.Name()] = d
 	}
 	return r
@@ -170,17 +188,10 @@ func (r *Registry) Get(name string) (Driver, error) {
 // For returns the driver for a target.
 func (r *Registry) For(t Target) (Driver, error) { return r.Get(t.Engine) }
 
-// Names lists registered engines, sorted.
-func (r *Registry) Names() []string {
-	out := make([]string, 0, len(r.drivers))
-	for n := range r.drivers {
-		out = append(out, n)
-	}
-	sort.Strings(out)
-	return out
-}
+// Names lists registered engines in registration order.
+func (r *Registry) Names() []string { return append([]string(nil), r.order...) }
 
-// Drivers lists registered drivers, sorted by name.
+// Drivers lists registered drivers in registration order.
 func (r *Registry) Drivers() []Driver {
 	out := make([]Driver, 0, len(r.drivers))
 	for _, n := range r.Names() {
@@ -198,6 +209,12 @@ func LocalhostHint(host string, err error) error {
 		return err
 	}
 	if _, statErr := os.Stat("/.dockerenv"); statErr != nil {
+		return err
+	}
+	// Only connectivity failures; an authentication error means the
+	// server was reached.
+	msg := err.Error()
+	if !strings.Contains(msg, "connection refused") && !strings.Contains(msg, "timeout") && !strings.Contains(msg, "could not connect") {
 		return err
 	}
 	return fmt.Errorf("%w. DBVault runs in Docker, so %q refers to the DBVault container itself: "+
