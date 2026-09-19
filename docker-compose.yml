@@ -114,6 +114,32 @@ services:
       timeout: 5s
       retries: 20
 
+  # Disposable MySQL and MariaDB servers for MySQL/MariaDB restore tests.
+  # Small buffers keep them light; they hold only short-lived test databases.
+  verify-mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    command: ["--innodb-buffer-pool-size=64M", "--performance-schema=OFF", "--skip-log-bin"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${VERIFY_MYSQL_PASSWORD:-${VERIFY_POSTGRES_PASSWORD}}
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  verify-mariadb:
+    image: mariadb:11.4
+    restart: unless-stopped
+    command: ["--innodb-buffer-pool-size=64M"]
+    environment:
+      MARIADB_ROOT_PASSWORD: ${VERIFY_MYSQL_PASSWORD:-${VERIFY_POSTGRES_PASSWORD}}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
@@ -169,6 +195,8 @@ services:
       VERIFY_UPLOADED_DATA: ${VERIFY_UPLOADED_DATA:-true}
       VERIFY_MODE: ${VERIFY_MODE:-server}
       VERIFY_POSTGRES_URL: postgres://postgres:${VERIFY_POSTGRES_PASSWORD}@verify-postgres:5432/postgres?sslmode=disable
+      VERIFY_MYSQL_URL: mysql://root:${VERIFY_MYSQL_PASSWORD:-${VERIFY_POSTGRES_PASSWORD}}@verify-mysql:3306/
+      VERIFY_MARIADB_URL: mariadb://root:${VERIFY_MYSQL_PASSWORD:-${VERIFY_POSTGRES_PASSWORD}}@verify-mariadb:3306/
     volumes:
       - dbvault-secrets:/var/lib/dbvault/secrets
       - dbvault-backups:/var/lib/dbvault/backups
@@ -177,6 +205,10 @@ services:
       api:
         condition: service_healthy
       verify-postgres:
+        condition: service_healthy
+      verify-mysql:
+        condition: service_healthy
+      verify-mariadb:
         condition: service_healthy
     stop_grace_period: 6m
     healthcheck:

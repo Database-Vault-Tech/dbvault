@@ -15,8 +15,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 FROM alpine:3.23
 # postgresql18-client provides pg_dump/pg_restore 18, which can back up and
-# restore every PostgreSQL server from 9.2 through 18.
-RUN apk add --no-cache ca-certificates tzdata postgresql18-client \
+# restore every PostgreSQL server from 9.2 through 18. mariadb-client
+# provides mariadb-dump/mariadb for MySQL 5.7+ and MariaDB 10+ (with
+# mariadb-connector-c's caching_sha2_password plugin for MySQL 8+).
+RUN apk add --no-cache ca-certificates tzdata postgresql18-client mariadb-client mariadb-connector-c \
  && addgroup -S -g 10001 dbvault && adduser -S -D -u 10001 -G dbvault -h /var/lib/dbvault dbvault \
  && mkdir -p /var/lib/dbvault/backups /var/lib/dbvault/work /var/lib/dbvault/secrets \
  && chown -R dbvault:dbvault /var/lib/dbvault && chmod 700 /var/lib/dbvault/secrets /var/lib/dbvault/work
