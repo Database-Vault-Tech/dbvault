@@ -1,7 +1,6 @@
 package pgtools
 
 import (
-	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -67,23 +66,6 @@ func TestDumpArgsNeverContainCredentials(t *testing.T) {
 		if strings.Contains(strings.ToLower(a), "password=") || strings.Contains(a, "@") {
 			t.Fatalf("credentials must never be passed in argv: %v", DumpArgs())
 		}
-	}
-}
-
-func TestTailBufferSummary(t *testing.T) {
-	tb := &tailBuffer{max: 64}
-	_, _ = tb.Write([]byte(strings.Repeat("x", 100)))
-	if len(tb.String()) != 64 {
-		t.Fatalf("tail buffer kept %d bytes", len(tb.String()))
-	}
-	tb2 := &tailBuffer{max: 4096}
-	_, _ = tb2.Write([]byte("pg_dump: connecting\npg_dump: error: query failed: permission denied for table secrets\n"))
-	s := tb2.Summary(errors.New("exit status 1"))
-	if !strings.Contains(s, "permission denied") || strings.Contains(s, "connecting") {
-		t.Fatalf("summary should keep the error line only: %q", s)
-	}
-	if (&tailBuffer{max: 10}).Summary(errors.New("exit status 2")) != "exit status 2" {
-		t.Fatal("empty stderr should fall back to the exit error")
 	}
 }
 

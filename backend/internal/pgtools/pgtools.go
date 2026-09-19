@@ -5,20 +5,17 @@ package pgtools
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
+
+	"github.com/dbvault/dbvault/backend/internal/proc"
 )
 
 type Tools struct {
@@ -70,10 +67,7 @@ func (t Tools) CheckCompatible(ctx context.Context, name string, serverMajor int
 }
 
 // Process is a running PostgreSQL client program.
-type Process struct {
-	cmd    *exec.Cmd
-	stderr *tailBuffer
-}
+type Process = proc.Process
 
 // DumpArgs are the pg_dump arguments DBVault uses: custom format (so
 // pg_restore can restore selectively), with pg_dump's own compression
@@ -144,9 +138,8 @@ func (t Tools) NeedsCompat(ctx context.Context, serverMajor int) (bool, int) {
 func (t Tools) ListArchive(ctx context.Context, archive io.Reader) ([]TOCEntry, error) {
 	cmd := exec.CommandContext(ctx, t.Path("pg_restore"), "--list")
 	cmd.Stdin = archive
-	var stderr tailBuffer
-	stderr.max = 16 << 10
-	cmd.Stderr = &stderr
+	stderr := proc.NewTailBuffer(16 << 10)
+	cmd.Stderr = stderr
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -215,99 +208,5 @@ func CountTables(entries []TOCEntry) int {
 }
 
 func start(cmd *exec.Cmd, env []string, stdin io.Reader, wantStdout bool) (*Process, io.ReadCloser, error) {
-	// Minimal environment: PATH plus libpq settings. The worker's own
-	// environment (which holds DBVault secrets) is never inherited.
-	cmd.Env = append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.TempDir(), "LC_ALL=C"}, env...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// Kill the whole process group so no orphaned children remain.
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
-	cmd.WaitDelay = 10 * time.Second
-	stderr := &tailBuffer{max: 32 << 10}
-	cmd.Stderr = stderr
-	var stdout io.ReadCloser
-	if stdin != nil {
-		cmd.Stdin = stdin
-	}
-	if wantStdout {
-		var err error
-		stdout, err = cmd.StdoutPipe()
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		cmd.Stdout = io.Discard
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, nil, fmt.Errorf("start %s: %w", filepath.Base(cmd.Path), err)
-	}
-	return &Process{cmd: cmd, stderr: stderr}, stdout, nil
-}
-
-// Wait waits for the process and returns a concise error including the tail
-// of stderr when it fails.
-func (p *Process) Wait() error {
-	err := p.cmd.Wait()
-	if err != nil {
-		return errors.New(p.stderr.Summary(err))
-	}
-	return nil
-}
-
-// Stderr returns the captured tail of stderr.
-func (p *Process) Stderr() string { return p.stderr.String() }
-
-// tailBuffer keeps the last max bytes written to it.
-type tailBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-	max int
-}
-
-func (t *tailBuffer) Write(p []byte) (int, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.buf.Write(p)
-	if t.buf.Len() > t.max {
-		b := t.buf.Bytes()
-		keep := append([]byte(nil), b[len(b)-t.max:]...)
-		t.buf.Reset()
-		t.buf.Write(keep)
-	}
-	return len(p), nil
-}
-
-func (t *tailBuffer) String() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.buf.String()
-}
-
-// Summary returns the most relevant stderr lines (errors first).
-func (t *tailBuffer) Summary(err error) string {
-	lines := strings.Split(strings.TrimSpace(t.String()), "\n")
-	var picked []string
-	for _, l := range lines {
-		if strings.Contains(l, "error:") || strings.Contains(l, "FATAL") || strings.Contains(l, "ERROR") {
-			picked = append(picked, strings.TrimSpace(l))
-		}
-	}
-	if len(picked) == 0 && len(lines) > 0 && lines[0] != "" {
-		picked = lines
-	}
-	if len(picked) > 5 {
-		picked = picked[len(picked)-5:]
-	}
-	msg := strings.Join(picked, "; ")
-	if msg == "" {
-		return err.Error()
-	}
-	if len(msg) > 1500 {
-		msg = msg[:1500] + "..."
-	}
-	return msg
+	return proc.Start(cmd, env, stdin, wantStdout)
 }
