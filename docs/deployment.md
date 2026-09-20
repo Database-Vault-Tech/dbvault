@@ -14,9 +14,9 @@ push to main / tag v*        docker/build-push-action        ssh + compose
                                      (rolls back to the previous tag on failure)
 ```
 
-Tags: `sha-<short sha>` plus `latest` for pushes to `main`, and the version
-(`v1.2.3` → `1.2.3`) plus `latest` for git tags. The rollout always pins the
-immutable tag, so `latest` moving never changes what is running.
+Images are tagged with the full commit SHA and with `latest`. The rollout
+always pins the SHA, so `latest` moving never changes what is running, and any
+past commit can be redeployed by its SHA.
 
 ## Server prerequisites
 
@@ -86,8 +86,7 @@ Repository → Settings → Secrets and variables → Actions → **Secrets**.
 
 | Secret | Required | What it is |
 | --- | --- | --- |
-| `DOCKERHUB_USERNAME` | yes | Docker Hub account (also the image namespace: `<user>/dbvault-backend`). For an organization, use the org name and a member account's token. |
-| `DOCKERHUB_TOKEN` | yes | Docker Hub access token with **Read & Write** scope (Account Settings → Personal access tokens). Not your password. |
+| `DOCKERHUB_TOKEN` | yes | Docker Hub access token with **Read & Write** scope (Account Settings → Personal access tokens). Not your password. Create the `dbvault-backend` and `dbvault-frontend` repositories on Docker Hub first — a token can push to an existing repository without being able to create one. |
 | `DEPLOY_HOST` | yes | VPS hostname or IP. |
 | `DEPLOY_USER` | yes | SSH user on the VPS, in the `docker` group (e.g. `deploy`). |
 | `DEPLOY_SSH_PASSWORD` | yes | Password of that SSH user. Fed to `ssh`/`scp` through `sshpass -e`, so it never reaches a command line or the process list. |
@@ -101,6 +100,7 @@ Same page, **Variables** tab. None are required.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `DOCKERHUB_USERNAME` | — | **Required.** Docker Hub account, and the image namespace: `<user>/dbvault-backend`. It is a variable rather than a secret on purpose — GitHub blanks out any value containing a secret when it crosses between jobs, which would leave the image nameless. |
 | `SITE_URL` | `https://dbvault.tech` | Baked into the frontend image at build time (canonical links, sitemap, robots, social cards). |
 | `APP_URL` | — | Public URL. When set, the workflow smoke-tests `$APP_URL/api/health` after the rollout and shows the link on the run. |
 | `DEPLOY_PATH` | `/opt/dbvault` | Directory on the VPS holding the compose files and `.env`. |
@@ -114,10 +114,11 @@ manual approval.
 
 ## Running it
 
-- Push to `main`, or push a `v*` tag — builds and deploys automatically.
-- Actions → Deploy → **Run workflow** — optionally with `image_tag` to build a
-  custom tag, or `image_tag` + `skip_build` to redeploy an already-published
-  tag (this is the fastest rollback).
+- Push to `main` — builds both images (tagged with the commit SHA and
+  `latest`) and deploys the SHA tag.
+- Actions → Deploy → **Run workflow** with `deploy_tag` set to an earlier
+  commit SHA — redeploys that already-published tag without rebuilding. This
+  is the fastest rollback.
 
 ## Rolling back by hand
 
