@@ -4,7 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useQueryClient } from "@tanstack/react-query"
 import { Mail, User } from "lucide-react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useState } from "react"
 import { useForm } from "react-hook-form"
 
@@ -20,6 +20,10 @@ import { registerSchema, type RegisterValues } from "@/lib/schemas"
 
 export function RegisterForm() {
   const router = useRouter()
+  // Present when arriving from an invitation link. It lets the account be
+  // created on an instance with registration closed, and sends the new user
+  // back to the invitation to accept it.
+  const invite = useSearchParams().get("invite") ?? ""
   const qc = useQueryClient()
   const [error, setError] = useState<string | null>(null)
   const form = useForm<RegisterValues>({ resolver: zodResolver(registerSchema), defaultValues: { name: "", email: "", password: "" } })
@@ -27,9 +31,9 @@ export function RegisterForm() {
   const onSubmit = form.handleSubmit(async (values) => {
     setError(null)
     try {
-      await api.post("/auth/register", values, { noOrg: true })
+      await api.post("/auth/register", { ...values, invite_token: invite }, { noOrg: true })
       qc.clear()
-      router.replace("/dashboard")
+      router.replace(invite ? `/invite?token=${encodeURIComponent(invite)}` : "/dashboard")
     } catch (err) {
       if (err instanceof ApiError && Object.keys(err.fields).length) {
         for (const [field, message] of Object.entries(err.fields)) {

@@ -56,6 +56,9 @@ type registerReq struct {
 	Name     string `json:"name"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Set when arriving from an invitation link, so the account can be
+	// created even though open registration is disabled.
+	InviteToken string `json:"invite_token"`
 }
 
 func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +78,7 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	res, orgID, err := h.Svc.Register(r.Context(), req.Name, req.Email, req.Password)
+	res, orgID, err := h.Svc.Register(r.Context(), req.Name, req.Email, req.Password, strings.TrimSpace(req.InviteToken))
 	if err != nil {
 		httpx.Error(w, r, err)
 		return

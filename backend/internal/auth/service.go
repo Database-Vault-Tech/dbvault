@@ -60,8 +60,23 @@ type SessionResult struct {
 
 func normalizeEmail(e string) string { return strings.ToLower(strings.TrimSpace(e)) }
 
+// invited reports whether token is a live invitation addressed to email.
+// Someone holding one has to be able to create the account it was sent to,
+// otherwise closed registration makes invitations impossible to accept.
+func (s *Service) invited(ctx context.Context, email, token string) bool {
+	if token == "" || !strings.HasPrefix(token, InviteTokenPrefix) {
+		return false
+	}
+	var n int
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM organization_invitations
+		WHERE token_hash = $1 AND lower(email) = $2 AND accepted_at IS NULL AND expires_at > now()`,
+		s.Hasher.Hash(token), normalizeEmail(email)).Scan(&n)
+	return err == nil && n > 0
+}
+
 // Register creates a user, their personal organization and a session.
-func (s *Service) Register(ctx context.Context, name, email, password string) (SessionResult, string, error) {
+// inviteToken may be empty; it only matters when registration is closed.
+func (s *Service) Register(ctx context.Context, name, email, password, inviteToken string) (SessionResult, string, error) {
 	if !s.AllowRegistration {
 		var n int
 		if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n); err != nil {
@@ -69,7 +84,7 @@ func (s *Service) Register(ctx context.Context, name, email, password string) (S
 		}
 		// The very first account can always be created so a fresh install
 		// is usable; after that, new users must be invited.
-		if n > 0 {
+		if n > 0 && !s.invited(ctx, email, inviteToken) {
 			return SessionResult{}, "", apperr.Forbidden("Registration is disabled on this DBVault instance. Ask an administrator for an invitation.")
 		}
 	}

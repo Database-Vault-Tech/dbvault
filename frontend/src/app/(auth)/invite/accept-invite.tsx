@@ -28,9 +28,9 @@ export function AcceptInvite() {
             <Link href={`/login?next=${encodeURIComponent(next)}`}>Sign in to accept</Link>
           </Button>
           <Button asChild size="lg" variant="outline">
-            <Link href={`/register`}>Create an account</Link>
+            <Link href={`/register?invite=${encodeURIComponent(token)}`}>Create an account</Link>
           </Button>
-          <p className="pt-2 text-xs text-muted-foreground">After creating an account, open the invitation link again to accept it.</p>
+          <p className="pt-2 text-xs text-muted-foreground">Use the address the invitation was sent to; you will come back here to accept it.</p>
         </div>
       </>
     )

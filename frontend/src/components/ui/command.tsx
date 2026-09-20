@@ -59,7 +59,10 @@ function CommandDialog({
         )}
         showCloseButton={showCloseButton}
       >
-        {children}
+        {/* cmdk keeps its state on a context that <Command> provides; without
+            this wrapper every Input/List/Item below throws on an undefined
+            store the moment the dialog opens. */}
+        <Command>{children}</Command>
       </DialogContent>
     </Dialog>
   )
