@@ -1,6 +1,7 @@
 # Local configuration (contains secrets)
 .env
-.env.local
+.env.*
+!.env.example
 *.env.bak
 
 # Build output

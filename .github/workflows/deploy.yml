@@ -1,0 +1,248 @@
+# Builds the backend and frontend images, pushes them to Docker Hub, then
+# rolls the whole compose stack over on the VPS via SSH.
+#
+# Required secrets and variables are listed in docs/deployment.md.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag to build and deploy (default: sha-<short sha>, or the git tag)"
+        required: false
+        type: string
+      skip_build:
+        description: "Deploy an already-published tag without rebuilding"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Never let two rollouts touch the server at once, and never cancel one
+# half-way through.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Resolve images
+    runs-on: ubuntu-24.04
+    outputs:
+      backend: ${{ steps.names.outputs.backend }}
+      frontend: ${{ steps.names.outputs.frontend }}
+      tag: ${{ steps.names.outputs.tag }}
+    steps:
+      - id: names
+        env:
+          NAMESPACE: ${{ secrets.DOCKERHUB_USERNAME }}
+          INPUT_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$NAMESPACE" ]; then
+            echo "::error::The DOCKERHUB_USERNAME secret is not set."
+            exit 1
+          fi
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="${GITHUB_REF_NAME#v}"
+          else
+            tag="sha-${GITHUB_SHA::7}"
+          fi
+          {
+            echo "backend=$NAMESPACE/dbvault-backend"
+            echo "frontend=$NAMESPACE/dbvault-frontend"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+          echo "Deploying $NAMESPACE/dbvault-{backend,frontend}:$tag" >> "$GITHUB_STEP_SUMMARY"
+
+  build:
+    name: Build ${{ matrix.image }}
+    needs: prepare
+    if: ${{ !inputs.skip_build }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - image: backend
+            context: backend
+            name: ${{ needs.prepare.outputs.backend }}
+            build_args: VERSION=${{ needs.prepare.outputs.tag }}
+          - image: frontend
+            context: frontend
+            name: ${{ needs.prepare.outputs.frontend }}
+            # Baked in at build time: canonical links, sitemap, social cards.
+            build_args: SITE_URL=${{ vars.SITE_URL || 'https://dbvault.tech' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ needs.prepare.outputs.tag }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          # VPS hosts are almost always x86-64. Set the DEPLOY_PLATFORMS
+          # variable to linux/arm64 for an Ampere/Graviton box.
+          platforms: ${{ vars.DEPLOY_PLATFORMS || 'linux/amd64' }}
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=deploy-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=deploy-${{ matrix.image }}
+
+  deploy:
+    name: Roll out to VPS
+    needs: [prepare, build]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    # Optional: add required reviewers to this environment in repo settings
+    # to gate production rollouts behind an approval.
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          SSH_HOST: ${{ secrets.DEPLOY_HOST }}
+          SSH_USER: ${{ secrets.DEPLOY_USER }}
+          SSH_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for pair in SSHPASS:DEPLOY_SSH_PASSWORD SSH_HOST:DEPLOY_HOST SSH_USER:DEPLOY_USER; do
+            var=${pair%%:*}
+            if [ -z "${!var}" ]; then
+              echo "::error::The ${pair#*:} secret is not set."
+              exit 1
+            fi
+          done
+          # sshpass feeds the password from $SSHPASS, so it never appears in
+          # a command line or in the process list.
+          sudo apt-get update -qq
+          sudo apt-get install -yqq sshpass
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            # No pinned host key: trust what the server presents on first
+            # contact. Set DEPLOY_KNOWN_HOSTS to rule out MITM entirely --
+            # with password auth a spoofed host would be handed the password.
+            echo "::warning::DEPLOY_KNOWN_HOSTS is not set; falling back to ssh-keyscan."
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+            if [ ! -s ~/.ssh/known_hosts ]; then
+              echo "::error::ssh-keyscan got no host key from $SSH_HOST:$SSH_PORT."
+              exit 1
+            fi
+          fi
+          chmod 600 ~/.ssh/known_hosts
+          # ControlMaster reuses one authenticated connection for every step
+          # below, so a deploy logs in once instead of four times (repeated
+          # password logins are what trips fail2ban).
+          cat > ~/.ssh/config <<EOF
+          Host dbvault
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port $SSH_PORT
+            PubkeyAuthentication no
+            PreferredAuthentications password,keyboard-interactive
+            StrictHostKeyChecking yes
+            ControlMaster auto
+            ControlPath ~/.ssh/cm-%r@%h-%p
+            ControlPersist 10m
+            ServerAliveInterval 30
+            ConnectTimeout 20
+          EOF
+          chmod 600 ~/.ssh/config
+          sshpass -e ssh dbvault 'docker compose version'
+
+      - name: Ship compose files
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/dbvault' }}
+        run: |
+          set -euo pipefail
+          tar czf stack.tgz docker-compose.yml docker-compose.prod.yml docker/
+          sshpass -e ssh dbvault "mkdir -p '$DEPLOY_PATH'"
+          sshpass -e scp stack.tgz dbvault:"$DEPLOY_PATH/stack.tgz"
+          sshpass -e ssh dbvault "cd '$DEPLOY_PATH' && tar xzf stack.tgz && rm -f stack.tgz"
+
+      - name: Write .env
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          ENV_FILE: ${{ secrets.DEPLOY_ENV_FILE }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/dbvault' }}
+        run: |
+          set -euo pipefail
+          # Optional: when the secret is unset, whatever .env the server
+          # already has is left alone (deploy-remote.sh fails if there is none).
+          if [ -z "$ENV_FILE" ]; then
+            echo "DEPLOY_ENV_FILE is not set; keeping the .env already on the server."
+            exit 0
+          fi
+          # Written atomically and mode 600 — it holds ENCRYPTION_KEY.
+          printf '%s\n' "$ENV_FILE" |
+            sshpass -e ssh dbvault "umask 077 && cat > '$DEPLOY_PATH/.env.tmp' && mv '$DEPLOY_PATH/.env.tmp' '$DEPLOY_PATH/.env'"
+
+      - name: Deploy
+        env:
+          SSHPASS: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/dbvault' }}
+          BACKEND: ${{ needs.prepare.outputs.backend }}
+          FRONTEND: ${{ needs.prepare.outputs.frontend }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sshpass -e ssh dbvault "DEPLOY_PATH='$DEPLOY_PATH' \
+            DBVAULT_IMAGE_BACKEND='$BACKEND' \
+            DBVAULT_IMAGE_FRONTEND='$FRONTEND' \
+            DBVAULT_IMAGE_TAG='$TAG' \
+            bash -s" < scripts/deploy-remote.sh
+
+      - name: Smoke test
+        if: ${{ vars.APP_URL != '' }}
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 15 "${APP_URL%/}/api/health" >/dev/null; then
+              echo "$APP_URL is healthy"
+              exit 0
+            fi
+            echo "attempt $i failed, retrying..."
+            sleep 5
+          done
+          echo "::error::$APP_URL/api/health did not respond after the rollout."
+          exit 1
+
+      - name: Close the SSH connection
+        if: always()
+        run: |
+          ssh -O exit dbvault 2>/dev/null || true
+          rm -f ~/.ssh/config ~/.ssh/known_hosts ~/.ssh/cm-*

@@ -174,6 +174,23 @@ Everything is configured with environment variables; every one is documented in
 | `WORKER_CONCURRENCY` | Parallel jobs per worker. |
 | `ALLOW_REGISTRATION` | Turn off open sign-up after creating the first account. |
 
+## Deploying
+
+`docker-compose.prod.yml` runs the stack from published images instead of
+building from source:
+
+```bash
+DBVAULT_IMAGE_BACKEND=<namespace>/dbvault-backend \
+DBVAULT_IMAGE_FRONTEND=<namespace>/dbvault-frontend \
+DBVAULT_IMAGE_TAG=latest \
+  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --wait
+```
+
+The `Deploy` workflow does this for you: it builds both images, pushes them to
+Docker Hub and rolls the stack over on your server via SSH, rolling back to the
+previous tag if the new one doesn't come up healthy. Server setup and the list
+of GitHub secrets to configure: [docs/deployment.md](docs/deployment.md).
+
 ## Storage
 
 | Provider | What you need |
