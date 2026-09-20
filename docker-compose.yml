@@ -73,7 +73,8 @@ services:
       retries: 20
 
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes to Docker Hub; quay.io is the official home.
+    image: quay.io/minio/minio:latest
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -87,7 +88,7 @@ services:
   # Creates the backup bucket and a least-privilege service account that
   # can only access that bucket, then exits.
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     depends_on:
       - minio
     environment:
