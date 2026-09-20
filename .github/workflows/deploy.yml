@@ -73,13 +73,8 @@ jobs:
         include:
           - image: backend
             context: backend
-            name: ${{ needs.prepare.outputs.backend }}
-            build_args: VERSION=${{ needs.prepare.outputs.tag }}
           - image: frontend
             context: frontend
-            name: ${{ needs.prepare.outputs.frontend }}
-            # Baked in at build time: canonical links, sitemap, social cards.
-            build_args: SITE_URL=${{ vars.SITE_URL || 'https://dbvault.tech' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -91,10 +86,24 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # Guards against a silently empty image name: without a namespace the
+      # push would target docker.io/library/<tag> and fail as "insufficient_scope".
+      - name: Resolve image name
+        id: img
+        env:
+          NAME: ${{ matrix.image == 'backend' && needs.prepare.outputs.backend || needs.prepare.outputs.frontend }}
+        run: |
+          set -euo pipefail
+          case "$NAME" in
+            */*) ;;
+            *) echo "::error::Resolved image name '$NAME' has no namespace."; exit 1 ;;
+          esac
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ matrix.name }}
+          images: ${{ steps.img.outputs.name }}
           tags: |
             type=raw,value=${{ needs.prepare.outputs.tag }}
             type=raw,value=latest,enable={{is_default_branch}}
@@ -109,7 +118,9 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ matrix.build_args }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.tag }}
+            SITE_URL=${{ vars.SITE_URL || 'https://dbvault.tech' }}
           cache-from: type=gha,scope=deploy-${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=deploy-${{ matrix.image }}
 
