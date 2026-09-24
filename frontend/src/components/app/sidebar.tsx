@@ -4,11 +4,11 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 
 import { Logo } from "@/components/brand/logo"
-import { useSystemStatus } from "@/lib/queries"
+import { useMe, useSystemStatus } from "@/lib/queries"
 import { formatVersion } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
-import { isActive, primaryNav, secondaryNav, type NavItem } from "./nav"
+import { adminNav, isActive, primaryNav, secondaryNav, type NavItem } from "./nav"
 import { StatusDot } from "./status"
 
 function NavLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
@@ -53,6 +53,7 @@ function SystemHealth() {
 }
 
 export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
+  const { data: me } = useMe()
   return (
     <div className="flex h-full flex-col gap-6 px-3 py-4">
       <Link href="/dashboard" className="px-2" onClick={onNavigate}>
@@ -69,6 +70,12 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <NavLink key={item.href} item={item} onNavigate={onNavigate} />
         ))}
       </nav>
+      {me?.is_instance_admin && (
+        <nav className="flex flex-col gap-0.5" aria-label="Instance">
+          <div className="px-2.5 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">Instance</div>
+          <NavLink item={adminNav} onNavigate={onNavigate} />
+        </nav>
+      )}
       <div className="mt-auto">
         <SystemHealth />
       </div>

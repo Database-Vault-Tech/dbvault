@@ -34,6 +34,9 @@ type Config struct {
 	CookieSecure      bool
 	TrustProxyHeaders bool
 	AllowRegistration bool
+	// InstanceAdminEmails may open the read-only /admin area, which spans
+	// every organization on this installation.
+	InstanceAdminEmails []string
 
 	// Infrastructure
 	DatabaseURL    string
@@ -115,6 +118,7 @@ func Load() (*Config, error) {
 		AppURL:                     strings.TrimRight(env("APP_URL", "http://localhost:3000"), "/"),
 		TrustProxyHeaders:          envBool("TRUST_PROXY_HEADERS", false),
 		AllowRegistration:          envBool("ALLOW_REGISTRATION", true),
+		InstanceAdminEmails:        envList("INSTANCE_ADMIN_EMAILS"),
 		DatabaseURL:                env("DATABASE_URL", ""),
 		RedisURL:                   env("REDIS_URL", "redis://localhost:6379/0"),
 		MigrateOnStart:             envBool("MIGRATE_ON_START", true),
@@ -299,6 +303,17 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// envList splits a comma-separated variable, lowercasing and dropping blanks.
+func envList(key string) []string {
+	var out []string
+	for _, v := range strings.Split(os.Getenv(key), ",") {
+		if v = strings.ToLower(strings.TrimSpace(v)); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func envBool(key string, def bool) bool {

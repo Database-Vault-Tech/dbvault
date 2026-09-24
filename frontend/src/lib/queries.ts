@@ -14,6 +14,10 @@ import {
 
 import { api } from "./api"
 import type {
+  AdminOrgDetail,
+  AdminOrgSummary,
+  AdminOverview,
+  AdminUser,
   ApiToken,
   AuditLog,
   Backup,
@@ -59,6 +63,8 @@ function searchParams(filters: Record<string, string | undefined | null>, before
 
 export const keys = {
   me: ["me"] as const,
+  admin: ["admin"] as const,
+  adminOrg: (id: string) => ["admin", "organization", id] as const,
   system: ["system"] as const,
   dashboard: ["dashboard"] as const,
   databases: ["databases"] as const,
@@ -105,6 +111,24 @@ export function useMe() {
     staleTime: 60_000,
     retry: false,
   })
+}
+
+// Instance admin: account-level (no org header), read-only.
+
+export function useAdminOverview() {
+  return useQuery({ queryKey: [...keys.admin, "overview"], queryFn: () => api.get<AdminOverview>("/admin/overview", { noOrg: true }), refetchInterval: 30_000 })
+}
+
+export function useAdminOrganizations() {
+  return useQuery({ queryKey: [...keys.admin, "organizations"], queryFn: () => api.get<AdminOrgSummary[]>("/admin/organizations", { noOrg: true }) })
+}
+
+export function useAdminOrganization(id: string) {
+  return useQuery({ queryKey: keys.adminOrg(id), queryFn: () => api.get<AdminOrgDetail>(`/admin/organizations/${id}`, { noOrg: true }) })
+}
+
+export function useAdminUsers() {
+  return useQuery({ queryKey: [...keys.admin, "users"], queryFn: () => api.get<AdminUser[]>("/admin/users", { noOrg: true }) })
 }
 
 export function useSystemStatus() {

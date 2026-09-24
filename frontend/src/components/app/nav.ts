@@ -8,6 +8,7 @@ import {
   RotateCcw,
   ScrollText,
   Settings,
+  ShieldHalf,
   Users,
   type LucideIcon,
 } from "lucide-react"
@@ -35,6 +36,8 @@ export const secondaryNav: NavItem[] = [
   { label: "Audit log", href: "/audit-logs", icon: ScrollText },
   { label: "Settings", href: "/settings", icon: Settings, match: ["/settings/security"] },
 ]
+
+export const adminNav: NavItem = { label: "Instance admin", href: "/admin", icon: ShieldHalf }
 
 export function isActive(pathname: string, item: NavItem): boolean {
   if (item.href === "/settings") return pathname === "/settings" || (item.match ?? []).some((m) => pathname.startsWith(m))

@@ -23,6 +23,8 @@ export interface Me {
   organizations: Organization[]
   auth_method: "user" | "api_token"
   csrf_token?: string
+  /** Can open the read-only, installation-wide /admin area. */
+  is_instance_admin?: boolean
 }
 
 export type SSLMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full"
@@ -540,4 +542,109 @@ export interface SystemStatus {
 export interface ListMeta {
   limit: number
   next_before?: string
+}
+
+// Instance admin (read-only, every organization). Secrets are never included.
+
+export interface AdminOverview {
+  organizations: number
+  users: number
+  databases: number
+  backups: number
+  storage_bytes: number
+  failed_backups_7d: number
+  active_jobs: number
+  workers: WorkerPresence[]
+}
+
+export interface AdminOrgSummary {
+  id: string
+  name: string
+  slug: string
+  owner_email: string | null
+  members: number
+  databases: number
+  backups: number
+  storage_bytes: number
+  last_backup_at: string | null
+  failed_backups_7d: number
+  created_at: string
+}
+
+export interface AdminMember {
+  user_id: string
+  name: string
+  email: string
+  role: Role
+  last_login_at: string | null
+  joined_at: string
+}
+
+export interface AdminDatabase {
+  id: string
+  name: string
+  engine: string
+  host: string
+  port: number
+  database: string
+  version: string | null
+  size_bytes: number | null
+  last_test_ok: boolean | null
+  last_backup_at: string | null
+  last_backup_status: string | null
+  created_at: string
+}
+
+export interface AdminStorage {
+  id: string
+  name: string
+  type: string
+  is_default: boolean
+  last_test_ok: boolean | null
+  used_bytes: number
+  created_at: string
+}
+
+export interface AdminSchedule {
+  id: string
+  name: string
+  database_name: string
+  cron_expression: string
+  timezone: string
+  enabled: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+}
+
+export interface AdminBackup {
+  id: string
+  database_name: string
+  status: string
+  trigger: "manual" | "scheduled"
+  size_bytes: number | null
+  verification_status: string
+  error: string | null
+  duration_ms: number | null
+  created_at: string
+  completed_at: string | null
+}
+
+export interface AdminOrgDetail {
+  organization: AdminOrgSummary
+  members: AdminMember[]
+  databases: AdminDatabase[]
+  storage: AdminStorage[]
+  schedules: AdminSchedule[]
+  backups: AdminBackup[]
+  audit_logs: AuditLog[]
+}
+
+export interface AdminUser {
+  id: string
+  name: string
+  email: string
+  is_instance_admin: boolean
+  organizations: { id: string; name: string; role: Role }[]
+  last_login_at: string | null
+  created_at: string
 }

@@ -60,6 +60,7 @@ const (
 	NotificationUpdated    = "notification.updated"
 	NotificationDeleted    = "notification.deleted"
 	NotificationTestedSent = "notification.test_sent"
+	AdminOrgViewed         = "admin.organization_viewed"
 )
 
 // Entry is one action to record.

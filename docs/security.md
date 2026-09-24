@@ -12,6 +12,7 @@ how it protects them, and what you must do as an operator.
 | Backup encryption keys | Per-organization age identities, sealed with `ENCRYPTION_KEY` |
 | User accounts | argon2id password hashes; opaque server-side sessions; rate limiting |
 | Tenancy | Every query scoped by organization; non-members get 404 |
+| Instance admin | Read-only, GET-only, browser sessions only; never sees credentials, storage config or backup contents; every organization view is audited in that organization |
 | Integrity | SHA-256 recorded at backup time, verified after upload and before every restore |
 
 ## Key management
@@ -90,6 +91,21 @@ flowchart TD
 
 Resources of other organizations return `404` rather than `403`, so ids can't be probed.
 
+### Instance admin
+
+Accounts whose email is listed in `INSTANCE_ADMIN_EMAILS` get a separate, read-only view of the
+whole installation (`/admin`, API under `/api/admin`): every organization with its members,
+databases, storage destinations, schedules, recent backups and audit log, plus all users.
+
+- It grants **no** role inside any organization: `X-DBVault-Org` still requires membership.
+- Only `GET` is accepted. There is nothing to change, run, restore or download.
+- Database usernames and passwords, TLS certificates, storage configuration and credentials,
+  notification targets and backup contents are never returned.
+- Only browser sessions qualify. An API token never carries it, even for an admin's account.
+- Everyone else gets `404` for the whole area, so it can't be discovered.
+- Opening an organization writes `admin.organization_viewed` to *that organization's* audit log
+  (at most once per admin every 30 minutes), so its members can see who looked.
+
 ## Running pg_dump and pg_restore safely
 
 - No shell is ever involved: binaries are executed directly with fixed arguments.
@@ -138,6 +154,8 @@ that look sensitive are dropped.
 - [ ] Generate secrets with `./scripts/setup.sh` and back up `ENCRYPTION_KEY`.
 - [ ] Export each organization's recovery key and store it offline.
 - [ ] Set `ALLOW_REGISTRATION=false` after creating your account; invite teammates.
+- [ ] If you set `INSTANCE_ADMIN_EMAILS`, register those accounts first: the role follows the
+      email address, so whoever registers it gets the installation-wide view.
 - [ ] Use a least-privilege database role for backups (`pg_read_all_data` on PostgreSQL 14+).
 - [ ] Use a dedicated, versioned (ideally object-locked) bucket and a scoped access key.
 - [ ] Keep the API, PostgreSQL and Redis off the public internet (the default compose file does).
