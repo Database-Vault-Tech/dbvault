@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { errorMessage } from "@/lib/api"
 import { useOrg } from "@/lib/org"
+import { formatVersion, isContainerId } from "@/lib/format"
 import { useOrganization, useSystemStatus, useUpdateOrganization, useUpdateProfile } from "@/lib/queries"
 
 import { SettingsNav } from "./settings-nav"
@@ -95,15 +96,12 @@ function OrganizationForm({ org: data }: { org: ReturnType<typeof useOrganizatio
               <FieldLabel htmlFor="org-name">Name</FieldLabel>
               <Input id="org-name" value={name} maxLength={80} disabled={!can("admin")} onChange={(e) => setName(e.target.value)} />
             </Field>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <div className="text-sm font-medium">Slug</div>
-                <CopyField value={org.data.slug} />
-              </div>
-              <div className="space-y-1.5">
-                <div className="text-sm font-medium">ID</div>
-                <CopyField value={org.data.id} />
-              </div>
+            <div className="space-y-1.5">
+              <div className="text-sm font-medium">Slug</div>
+              <CopyField value={org.data.slug} />
+              <p className="text-xs text-muted-foreground">
+                Use it with the CLI&apos;s <code className="font-mono">--org</code> flag or <code className="font-mono">DBVAULT_ORG</code>.
+              </p>
             </div>
             <div className="flex gap-6 text-sm">
               <div>
@@ -149,7 +147,9 @@ function SystemCard() {
             <dl className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
               <div>
                 <dt className="text-xs text-muted-foreground">Version</dt>
-                <dd className="font-mono">{s.version}</dd>
+                <dd className="truncate font-mono" title={s.version}>
+                  {formatVersion(s.version)}
+                </dd>
               </div>
               <div>
                 <dt className="text-xs text-muted-foreground">Restore testing</dt>
@@ -179,10 +179,16 @@ function SystemCard() {
                 </p>
               ) : (
                 <ul className="divide-y rounded-lg border">
-                  {s.workers.map((w) => (
+                  {s.workers.map((w, i) => (
                     <li key={w.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 text-sm">
                       <StatusDot tone="success" />
-                      <span className="font-mono text-xs">{w.hostname}</span>
+                      {isContainerId(w.hostname) ? (
+                        <span className="font-medium" title={w.hostname}>
+                          Worker {i + 1}
+                        </span>
+                      ) : (
+                        <span className="font-mono text-xs">{w.hostname}</span>
+                      )}
                       <Badge variant="outline">pg_dump {w.capabilities.pg_dump_version ?? "missing"}</Badge>
                       {Object.entries(w.capabilities.engines ?? {}).map(([id, e]) => (
                         <Badge
