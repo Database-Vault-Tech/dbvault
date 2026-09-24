@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod"
 import { AlertTriangle, Download, KeyRound, Laptop, Plus } from "lucide-react"
-import { useMemo, useState } from "react"
+import { type ReactNode, useMemo, useState } from "react"
 import { useForm } from "react-hook-form"
 import { toast } from "sonner"
 import { z } from "zod"
@@ -296,6 +296,21 @@ function TokensCard() {
   )
 }
 
+const CLI_INSTALL =
+  "git clone --depth 1 https://github.com/Database-Vault-Tech/dbvault.git && cd dbvault/cli && go build -o dbvault . && sudo mv dbvault /usr/local/bin/"
+
+function CliStep({ n, title, children }: { n: number; title: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 gap-3">
+      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium tabular-nums">{n}</span>
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <div className="text-xs text-muted-foreground">{title}</div>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 function CreateTokenDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const create = useCreateApiToken()
   const [name, setName] = useState("")
@@ -311,17 +326,33 @@ function CreateTokenDialog({ open, onOpenChange }: { open: boolean; onOpenChange
   }
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="grid-cols-1 sm:max-w-xl">
         {token ? (
           <>
             <DialogHeader>
               <DialogTitle>Your new API token</DialogTitle>
               <DialogDescription>Copy it now — for your security it won&apos;t be shown again.</DialogDescription>
             </DialogHeader>
-            <CopyField value={token} />
-            <div className="space-y-1.5 text-sm">
-              <div className="text-muted-foreground">Configure the CLI:</div>
-              <CopyField value={`dbvault init --server ${server} --token ${token}`} />
+            <Alert>
+              <AlertTriangle />
+              <AlertDescription>Treat this token like a password. It can act as you in every organization you belong to.</AlertDescription>
+            </Alert>
+            <div className="min-w-0 space-y-1.5">
+              <div className="text-xs font-medium text-muted-foreground">Token</div>
+              <CopyField value={token} wrap />
+            </div>
+            <div className="min-w-0 space-y-4 border-t pt-4">
+              <div className="text-sm font-medium">Set up the CLI</div>
+              <CliStep n={1} title="Install the dbvault binary (needs Go)">
+                <CopyField value={CLI_INSTALL} wrap />
+              </CliStep>
+              <CliStep n={2} title="Connect it to this server">
+                <CopyField value={`dbvault init --server ${server} --token ${token}`} wrap />
+              </CliStep>
+              <p className="text-xs text-muted-foreground">
+                In CI, skip <code className="font-mono">init</code> and set <code className="font-mono">DBVAULT_SERVER</code> and{" "}
+                <code className="font-mono">DBVAULT_TOKEN</code> instead.
+              </p>
             </div>
             <DialogFooter>
               <Button onClick={() => close(false)}>Done</Button>
