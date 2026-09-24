@@ -16,6 +16,7 @@ x-backend-env: &backend-env
   APP_URL: ${APP_URL:-http://localhost:3000}
   COOKIE_SECURE: ${COOKIE_SECURE:-}
   ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+  INSTANCE_ADMIN_EMAILS: ${INSTANCE_ADMIN_EMAILS:-}
   DATABASE_URL: postgres://${POSTGRES_USER:-dbvault}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-dbvault}?sslmode=disable
   REDIS_URL: redis://redis:6379/0
   # Secrets: taken from .env when set, otherwise generated once and stored
@@ -245,6 +246,7 @@ services:
     environment:
       API_URL: http://api:8080
       SITE_URL: ${SITE_URL:-https://dbvault.tech}
+      LANDING_PAGE: ${LANDING_PAGE:-false}
     ports:
       - "${APP_PORT:-3000}:3000"
     depends_on:
