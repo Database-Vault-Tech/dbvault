@@ -86,6 +86,16 @@ export function storageShort(type: string): string {
   return ({ local: "Disk", s3: "S3", r2: "R2", minio: "MinIO" } as Record<string, string>)[type] ?? type
 }
 
+/** Release builds report "v1.2.0"; CI builds report a full git SHA, which we cut to 7 chars like git does. */
+export function formatVersion(v: string): string {
+  return /^[0-9a-f]{12,}$/i.test(v) ? v.slice(0, 7) : v
+}
+
+/** Worker hostnames inside Docker are container IDs, which mean nothing to users. */
+export function isContainerId(hostname: string): boolean {
+  return /^[0-9a-f]{12}$/i.test(hostname)
+}
+
 export function shortId(id: string | null | undefined): string {
   return id ? id.slice(0, 8) : "—"
 }
