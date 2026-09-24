@@ -302,11 +302,6 @@ export function BackupDetailView({ id }: { id: string }) {
                   <CopyField value={b.checksum_sha256} />
                 </Detail>
               )}
-              {b.job_id && (
-                <Detail label="Job ID" wide>
-                  <span className="font-mono text-xs text-muted-foreground">{b.job_id}</span>
-                </Detail>
-              )}
             </dl>
           </CardContent>
         </Card>
