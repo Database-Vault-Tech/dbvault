@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 
 import { Logo } from "@/components/brand/logo"
 import { useSystemStatus } from "@/lib/queries"
+import { formatVersion } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 import { isActive, primaryNav, secondaryNav, type NavItem } from "./nav"
@@ -44,7 +45,9 @@ function SystemHealth() {
         <StatusDot tone={data.verification.available ? "success" : "warning"} />
         <span>Restore testing {data.verification.available ? `(${data.verification.mode})` : "unavailable"}</span>
       </div>
-      <div className="pt-1 font-mono text-[10.5px] text-muted-foreground/70">DBVault {data.version}</div>
+      <div className="truncate pt-1 font-mono text-[10.5px] text-muted-foreground/70" title={data.version}>
+        DBVault {formatVersion(data.version)}
+      </div>
     </div>
   )
 }
