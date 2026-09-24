@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dbvault/dbvault/backend/internal/admin"
 	"github.com/dbvault/dbvault/backend/internal/app"
 	"github.com/dbvault/dbvault/backend/internal/apperr"
 	"github.com/dbvault/dbvault/backend/internal/audit"
@@ -48,6 +49,7 @@ func NewRouter(a *app.App) http.Handler {
 	r.Get("/health", health)
 	r.Get("/ready", ready)
 
+	adm := admin.New(a.Pool, a.Redis, a.Config.InstanceAdminEmails)
 	authH := &auth.Handlers{Svc: a.Auth, Limiter: a.Limiter, CookieSecure: a.Config.CookieSecure}
 
 	r.Route("/api", func(r chi.Router) {
@@ -69,9 +71,10 @@ func NewRouter(a *app.App) http.Handler {
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireAuth)
-			r.Get("/me", meHandler(a))
+			r.Get("/me", meHandler(a, adm))
 			r.Get("/system/status", systemStatusHandler(a))
 			a.Organizations.UserRoutes(r)
+			adm.Routes(r)
 
 			r.Group(func(r chi.Router) {
 				r.Use(a.Organizations.Middleware)
@@ -97,7 +100,7 @@ func NewRouter(a *app.App) http.Handler {
 	return r
 }
 
-func meHandler(a *app.App) http.HandlerFunc {
+func meHandler(a *app.App, adm *admin.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, _ := reqctx.PrincipalFrom(r.Context())
 		user, err := a.Auth.GetUser(r.Context(), p.UserID)
@@ -110,7 +113,7 @@ func meHandler(a *app.App) http.HandlerFunc {
 			httpx.Error(w, r, err)
 			return
 		}
-		out := map[string]any{"user": user, "organizations": orgs, "auth_method": p.ActorType()}
+		out := map[string]any{"user": user, "organizations": orgs, "auth_method": p.ActorType(), "is_instance_admin": adm.IsAdmin(p)}
 		if p.SessionID != "" {
 			// Lets the SPA recover its CSRF token if the cookie was lost.
 			out["csrf_token"] = a.Auth.Hasher.CSRFToken(p.SessionID)
