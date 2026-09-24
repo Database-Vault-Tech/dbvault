@@ -39,6 +39,9 @@ type env struct {
 
 var shared *env
 
+// instanceAdminEmail is unique per run because the test database persists.
+var instanceAdminEmail = uniqueEmail("instance-admin")
+
 func setup(t *testing.T) *env {
 	t.Helper()
 	dbURL, redisURL := os.Getenv("DBVAULT_TEST_DATABASE_URL"), os.Getenv("DBVAULT_TEST_REDIS_URL")
@@ -59,6 +62,7 @@ func setup(t *testing.T) *env {
 		LocalStorageRoot: t.TempDir(), WorkDir: t.TempDir(), WorkerConcurrency: 2, VerifyUploadedData: true,
 		VerifyMode: config.VerifyModeDisabled, RateLimitAuthPerMinute: 1000, RateLimitAPIPerMinute: 10000,
 		SMTP: config.SMTPConfig{TLSMode: "none"}, AllowPrivateNetworkTargets: true,
+		InstanceAdminEmails: []string{instanceAdminEmail},
 	}
 	log := logging.NewWithWriter(io.Discard, "error", "test")
 	a, err := app.New(context.Background(), cfg, log, app.RoleAPI)
@@ -263,6 +267,79 @@ func TestTenantIsolationAndSecrets(t *testing.T) {
 	}
 	if r := a.do("GET", "/api/databases/not-a-uuid", nil); r.Status != 404 {
 		t.Fatalf("malformed id: %d", r.Status)
+	}
+}
+
+func TestInstanceAdminIsReadOnlyAndHidden(t *testing.T) {
+	e := setup(t)
+	owner := newClient(t, e)
+	_, orgID := register(t, owner, "Tenant")
+	if r := owner.do("POST", "/api/databases", sampleDatabase("tenant-db")); r.Status != 201 {
+		t.Fatalf("create database: %d %s", r.Status, r.Raw)
+	}
+
+	// Regular users can't see the admin area exists.
+	if r := owner.do("GET", "/api/admin/organizations", nil); r.Status != 404 {
+		t.Fatalf("non-admin reached admin API: %d", r.Status)
+	}
+	if r := owner.do("GET", "/api/me", nil); r.data()["is_instance_admin"] != false {
+		t.Fatalf("non-admin flagged as admin: %s", r.Raw)
+	}
+
+	adm := newClient(t, e)
+	if r := adm.do("POST", "/api/auth/register", map[string]string{"name": "Root", "email": strings.ToUpper(instanceAdminEmail), "password": "correct-horse-battery"}); r.Status != 201 {
+		t.Fatalf("register admin: %d %s", r.Status, r.Raw)
+	}
+	if r := adm.do("GET", "/api/me", nil); r.data()["is_instance_admin"] != true {
+		t.Fatalf("admin not flagged: %s", r.Raw)
+	}
+	if r := adm.do("GET", "/api/admin/overview", nil); r.Status != 200 {
+		t.Fatalf("overview: %d %s", r.Status, r.Raw)
+	}
+	found := false
+	for _, o := range adm.do("GET", "/api/admin/organizations", nil).list() {
+		found = found || o.(map[string]any)["id"] == orgID
+	}
+	if !found {
+		t.Fatal("admin organization list is missing a tenant")
+	}
+	r := adm.do("GET", "/api/admin/organizations/"+orgID, nil)
+	if r.Status != 200 || len(r.data()["databases"].([]any)) != 1 {
+		t.Fatalf("organization detail: %d %s", r.Status, r.Raw)
+	}
+	for _, secret := range []string{"super-secret-pw", "password_encrypted", "credentials_encrypted", `"username"`} {
+		if bytes.Contains(r.Raw, []byte(secret)) {
+			t.Fatalf("admin detail exposes %s: %s", secret, r.Raw)
+		}
+	}
+	if r := adm.do("GET", "/api/admin/users", nil); r.Status != 200 || len(r.list()) < 2 {
+		t.Fatalf("users: %d %s", r.Status, r.Raw)
+	}
+
+	// The tenant sees that an admin looked, once despite repeated views.
+	adm.do("GET", "/api/admin/organizations/"+orgID, nil)
+	var views int
+	_ = e.app.Pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_logs WHERE organization_id = $1 AND action = 'admin.organization_viewed'`, orgID).Scan(&views)
+	if views != 1 {
+		t.Fatalf("expected 1 audited view, got %d", views)
+	}
+
+	// Being an instance admin grants nothing inside other organizations.
+	adm.org = orgID
+	if r := adm.do("GET", "/api/databases", nil); r.Status != 404 {
+		t.Fatalf("instance admin reached tenant API: %d", r.Status)
+	}
+	adm.org = ""
+	if r := adm.do("POST", "/api/admin/organizations", map[string]string{}); r.Status != 404 && r.Status != 405 {
+		t.Fatalf("admin API accepted a write: %d", r.Status)
+	}
+
+	// API tokens never carry admin rights, even for an admin's account.
+	tok := newClient(t, e).do("POST", "/api/auth/token", map[string]string{"email": instanceAdminEmail, "password": "correct-horse-battery", "name": "ci"})
+	cli := newClient(t, e)
+	cli.token = tok.data()["token"].(string)
+	if r := cli.do("GET", "/api/admin/overview", nil); r.Status != 404 {
+		t.Fatalf("API token reached admin API: %d", r.Status)
 	}
 }
 
