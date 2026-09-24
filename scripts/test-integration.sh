@@ -20,7 +20,7 @@ docker run -d --name "$PREFIX-mariadb" -e MARIADB_ROOT_PASSWORD=root --tmpfs /va
   -p 127.0.0.1::3306 mariadb:11.4 >/dev/null
 docker run -d --name "$PREFIX-redis" --tmpfs /data -p 127.0.0.1::6379 redis:7-alpine >/dev/null
 docker run -d --name "$PREFIX-minio" -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio-secret --tmpfs /data:size=1g \
-  -p 127.0.0.1::9000 quay.io/minio/minio server /data >/dev/null
+  -p 127.0.0.1::9000 pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data >/dev/null
 
 port() { docker port "$1" "$2" | head -1 | awk -F: '{print $NF}'; }
 PG_PORT=$(port "$PREFIX-pg" 5432)

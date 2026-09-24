@@ -74,8 +74,10 @@ services:
       retries: 20
 
   minio:
-    # MinIO no longer publishes to Docker Hub; quay.io is the official home.
-    image: quay.io/minio/minio:latest
+    # MinIO stopped publishing free images (Docker Hub is gone and quay.io now
+    # requires a login), so this is the community rebuild of the same upstream
+    # release. Pinned: bump the tag deliberately, never track :latest.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
     restart: unless-stopped
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
@@ -89,7 +91,7 @@ services:
   # Creates the backup bucket and a least-privilege service account that
   # can only access that bucket, then exits.
   minio-init:
-    image: quay.io/minio/mc:latest
+    image: pgsty/mc:RELEASE.2026-09-16T00-00-00Z
     depends_on:
       - minio
     environment:
