@@ -173,6 +173,8 @@ Everything is configured with environment variables; every one is documented in
 | `SMTP_*` | Email for notifications, invitations and password resets (Mailpit locally). |
 | `WORKER_CONCURRENCY` | Parallel jobs per worker. |
 | `ALLOW_REGISTRATION` | Turn off open sign-up after creating the first account. |
+| `LANDING_PAGE` | `true` shows the marketing page at `/`; by default `/` goes straight to sign-in. |
+| `INSTANCE_ADMIN_EMAILS` | Comma-separated emails that get the read-only *Instance admin* view of every organization. |
 
 ## Deploying
 
