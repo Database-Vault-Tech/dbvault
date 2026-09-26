@@ -26,6 +26,7 @@ type Handlers struct {
 func (h *Handlers) PublicRoutes(r chi.Router) {
 	r.Post("/register", h.register)
 	r.Post("/login", h.login)
+	r.Post("/login/2fa", h.loginTwoFactor)
 	r.Post("/token", h.token)
 	r.Post("/password/forgot", h.forgotPassword)
 	r.Post("/password/reset", h.resetPassword)
@@ -41,6 +42,11 @@ func (h *Handlers) PrivateRoutes(r chi.Router) {
 	r.Get("/tokens", h.listTokens)
 	r.Post("/tokens", h.createToken)
 	r.Delete("/tokens/{id}", h.revokeToken)
+	r.Get("/2fa", h.twoFactorStatus)
+	r.Post("/2fa/setup", h.twoFactorSetup)
+	r.Post("/2fa/enable", h.twoFactorEnable)
+	r.Post("/2fa/disable", h.twoFactorDisable)
+	r.Post("/2fa/recovery-codes", h.regenerateRecoveryCodes)
 }
 
 // perEmailLimit slows targeted credential guessing even across many IPs.
@@ -106,7 +112,30 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	res, err := h.Svc.Login(r.Context(), req.Email, req.Password)
+	res, challenge, err := h.Svc.Login(r.Context(), req.Email, req.Password)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	if challenge != nil {
+		// No session yet: the browser must come back with a code.
+		httpx.JSON(w, http.StatusOK, map[string]any{"mfa_required": true, "mfa_token": challenge.Token, "expires_at": challenge.ExpiresAt})
+		return
+	}
+	SetSessionCookies(w, res, h.CookieSecure)
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": res.User, "csrf_token": res.CSRF})
+}
+
+func (h *Handlers) loginTwoFactor(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		MFAToken string `json:"mfa_token"`
+		Code     string `json:"code"`
+	}
+	if err := httpx.Decode(w, r, &req); err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	res, err := h.Svc.CompleteMFALogin(r.Context(), req.MFAToken, req.Code)
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
@@ -118,7 +147,10 @@ func (h *Handlers) login(w http.ResponseWriter, r *http.Request) {
 type tokenReq struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-	Name     string `json:"name"`
+	// Code is the authenticator or recovery code, required when the
+	// account has two-factor authentication enabled.
+	Code string `json:"code"`
+	Name string `json:"name"`
 }
 
 // token exchanges credentials for an API token (used by `dbvault init`).
@@ -136,11 +168,6 @@ func (h *Handlers) token(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	user, err := h.Svc.Authenticate(r.Context(), req.Email, req.Password)
-	if err != nil {
-		httpx.Error(w, r, err)
-		return
-	}
 	name := strings.TrimSpace(req.Name)
 	if name == "" {
 		name = "CLI"
@@ -148,8 +175,7 @@ func (h *Handlers) token(w http.ResponseWriter, r *http.Request) {
 	if len(name) > 100 {
 		name = name[:100]
 	}
-	ctx := reqctx.WithPrincipal(r.Context(), reqctx.Principal{UserID: user.ID, Email: user.Email, Name: user.Name})
-	t, secret, err := h.Svc.CreateAPIToken(ctx, user.ID, name, 0)
+	t, secret, user, err := h.Svc.ExchangeForAPIToken(r.Context(), req.Email, req.Password, req.Code, name)
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
@@ -331,4 +357,120 @@ func (h *Handlers) revokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.NoContent(w)
+}
+
+func (h *Handlers) twoFactorStatus(w http.ResponseWriter, r *http.Request) {
+	p, _ := reqctx.PrincipalFrom(r.Context())
+	st, err := h.Svc.GetTwoFactorStatus(r.Context(), p.UserID)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, st)
+}
+
+// twoFactorReq is shared by the 2FA endpoints; each uses the fields it needs.
+type twoFactorReq struct {
+	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
+// decodeTwoFactor decodes the body and requires the named fields.
+func decodeTwoFactor(w http.ResponseWriter, r *http.Request, needPassword, needCode bool) (twoFactorReq, bool) {
+	var req twoFactorReq
+	if err := httpx.Decode(w, r, &req); err != nil {
+		httpx.Error(w, r, err)
+		return req, false
+	}
+	v := validate.New()
+	if needPassword {
+		v.Required("password", req.Password)
+	}
+	if needCode {
+		v.Required("code", req.Code)
+		v.MaxLen("code", req.Code, 64)
+	}
+	if err := v.Err(); err != nil {
+		httpx.Error(w, r, err)
+		return req, false
+	}
+	return req, true
+}
+
+// sessionOnly keeps 2FA management out of reach of API tokens: a leaked CLI
+// token must not be able to turn off the second factor.
+func sessionOnly(w http.ResponseWriter, r *http.Request) (reqctx.Principal, bool) {
+	p, _ := reqctx.PrincipalFrom(r.Context())
+	if p.SessionID == "" {
+		httpx.Error(w, r, apperr.Forbidden("Two-factor authentication can only be managed from a signed-in browser."))
+		return p, false
+	}
+	return p, true
+}
+
+func (h *Handlers) twoFactorSetup(w http.ResponseWriter, r *http.Request) {
+	p, ok := sessionOnly(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeTwoFactor(w, r, true, false)
+	if !ok {
+		return
+	}
+	setup, err := h.Svc.BeginTOTPSetup(r.Context(), p, req.Password)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, setup)
+}
+
+func (h *Handlers) twoFactorEnable(w http.ResponseWriter, r *http.Request) {
+	p, ok := sessionOnly(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeTwoFactor(w, r, false, true)
+	if !ok {
+		return
+	}
+	codes, err := h.Svc.EnableTOTP(r.Context(), p, req.Code)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
+}
+
+func (h *Handlers) twoFactorDisable(w http.ResponseWriter, r *http.Request) {
+	p, ok := sessionOnly(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeTwoFactor(w, r, true, true)
+	if !ok {
+		return
+	}
+	if err := h.Svc.DisableTOTP(r.Context(), p, req.Password, req.Code); err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.NoContent(w)
+}
+
+func (h *Handlers) regenerateRecoveryCodes(w http.ResponseWriter, r *http.Request) {
+	p, ok := sessionOnly(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeTwoFactor(w, r, true, true)
+	if !ok {
+		return
+	}
+	codes, err := h.Svc.RegenerateRecoveryCodes(r.Context(), p, req.Password, req.Code)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"recovery_codes": codes})
 }
