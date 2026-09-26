@@ -158,10 +158,7 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 	if in.Mode == "existing" {
 		v.Check(in.Confirmation == ConfirmationPhrase, "confirmation", "Type RESTORE to confirm this destructive operation.")
 	}
-	if in.Mode == "new" {
-		in.NewDatabaseName = strings.TrimSpace(in.NewDatabaseName)
-		v.Check(validate.IsPGIdentifier(in.NewDatabaseName), "new_database_name", "Use letters, numbers, underscores or dashes (max 63), starting with a letter.")
-	}
+	in.NewDatabaseName = strings.TrimSpace(in.NewDatabaseName)
 	if err := v.Err(); err != nil {
 		return Job{}, err
 	}
@@ -181,6 +178,15 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 			"This backup was taken from a %s database and can only be restored into a %s database.", engineLabel(s.Drivers, b.Engine), engineLabel(s.Drivers, b.Engine))})
 	}
 	if in.Mode == "new" {
+		// A new SQLite "database" is a file path in the SQLite folder;
+		// everything else creates a database on the target's server.
+		if fileBased(s.Drivers, target.Engine) {
+			if !validate.IsRelativeFilePath(in.NewDatabaseName) {
+				return Job{}, apperr.Validation(map[string]string{"new_database_name": "Enter a file path inside the SQLite folder, like app/restored.db."})
+			}
+		} else if !validate.IsPGIdentifier(in.NewDatabaseName) {
+			return Job{}, apperr.Validation(map[string]string{"new_database_name": "Use letters, numbers, underscores or dashes (max 63), starting with a letter."})
+		}
 		if exists, err := s.databaseExists(ctx, orgID, target.ID, in.NewDatabaseName); err == nil && exists {
 			return Job{}, apperr.Validation(map[string]string{"new_database_name": fmt.Sprintf(
 				"A database named %q already exists on this server. Choose another name, or pick \"Restore into the existing database\" to overwrite it.", in.NewDatabaseName)})
@@ -430,7 +436,11 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	createdDB := false
 	if r.Mode == "new" {
 		dbName = *r.NewDatabaseName
-		log.Infof("Creating database %q on %s:%d", dbName, target.Host, target.Port)
+		if drv.Capabilities().FileBased {
+			log.Infof("Restoring into new file %q", dbName)
+		} else {
+			log.Infof("Creating database %q on %s:%d", dbName, target.Host, target.Port)
+		}
 		if err := drv.CreateDatabase(ctx, target, dbName); err != nil {
 			return TableCheck{}, err
 		}
@@ -440,7 +450,14 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 		log.Warnf("Restoring over existing database %q: existing objects contained in the backup are dropped and recreated", dbName)
 	}
 
-	log.Infof("Running %s restore into %q (single transaction: all-or-nothing)", drv.Label(), dbName)
+	switch {
+	case drv.Capabilities().FileBased:
+		log.Infof("Running %s restore into %q (written to a temporary file, then swapped in: all-or-nothing)", drv.Label(), dbName)
+	case drv.Capabilities().AtomicRestore:
+		log.Infof("Running %s restore into %q (single transaction: all-or-nothing)", drv.Label(), dbName)
+	default:
+		log.Infof("Running %s restore into %q", drv.Label(), dbName)
+	}
 	if err := runRestore(ctx, drv, src, target, dbName, opts, log); err != nil {
 		if createdDB {
 			dropCreated(drv, target, dbName, log)
@@ -620,7 +637,13 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 	rep.TablesExpected = len(tbls)
 	log.Infof("Archive decrypted and decompressed; %d tables found in the archive", len(tbls))
 
-	if s.Sandbox == nil {
+	// File-based engines restore into a temporary directory on the worker:
+	// no container or verification server is needed.
+	sandbox := s.Sandbox
+	if drv.Capabilities().FileBased {
+		sandbox = FileSandbox{WorkDir: s.WorkDir}
+	}
+	if sandbox == nil {
 		msg := UnavailableMessage
 		if s.SandboxUnavailableReason != "" {
 			msg += ": " + s.SandboxUnavailableReason
@@ -630,7 +653,7 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		rep.Database = Check{Status: CheckUnavailable, Message: "Requires a restore test"}
 		return finish()
 	}
-	if err := s.Sandbox.Check(ctx, drv); err != nil {
+	if err := sandbox.Check(ctx, drv); err != nil {
 		msg := UnavailableMessage + ": " + err.Error()
 		log.Warnf("%s", msg)
 		rep.Restore = Check{Status: CheckUnavailable, Message: msg}
@@ -643,8 +666,8 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 	if b.PGVersion != nil {
 		major, _ = strconv.Atoi(strings.SplitN(*b.PGVersion, ".", 2)[0])
 	}
-	log.Infof("Starting restore sandbox (%s, %s %d)", s.Sandbox.Name(), drv.Label(), major)
-	inst, err := s.Sandbox.Provision(ctx, drv, major)
+	log.Infof("Starting restore sandbox (%s, %s %d)", sandbox.Name(), drv.Label(), major)
+	inst, err := sandbox.Provision(ctx, drv, major)
 	if err != nil {
 		rep.Restore = Check{Status: CheckFail, Message: "Could not start the restore sandbox: " + err.Error()}
 		return finish()
@@ -682,6 +705,11 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 		rep.Database = Check{Status: CheckPass, Message: fmt.Sprintf("%d of %d tables restored and queryable, %d rows counted", check.Found, check.Expected, check.Rows)}
 	}
 	return finish()
+}
+
+func fileBased(r *engine.Registry, name string) bool {
+	d, err := r.Get(name)
+	return err == nil && d.Capabilities().FileBased
 }
 
 func engineLabel(r *engine.Registry, name string) string {
