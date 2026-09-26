@@ -30,6 +30,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/config"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/logging"
+	"github.com/dbvault/dbvault/backend/internal/restore"
 	"github.com/dbvault/dbvault/backend/internal/worker"
 )
 
@@ -592,7 +593,6 @@ func TestTwoFactorAuthentication(t *testing.T) {
 	}
 }
 
-
 // TestSQLiteThroughAPI covers the SQLite flow the UI uses. It needs no
 // database server: restore tests run in a temporary folder on the worker.
 func TestSQLiteThroughAPI(t *testing.T) {
@@ -698,6 +698,251 @@ func TestSQLiteThroughAPI(t *testing.T) {
 	var n int
 	if err := rc.QueryRow("SELECT count(*) FROM items").Scan(&n); err != nil || n != 1234 {
 		t.Fatalf("restored rows = %d (%v), want 1234", n, err)
+	}
+}
+
+// waitRestore polls a restore until it finishes and returns it.
+func waitRestore(t *testing.T, c *client, id string) map[string]any {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		r := c.do("GET", "/api/restores/"+id, nil).data()["restore"].(map[string]any)
+		if s := r["status"]; s == "completed" || s == "failed" {
+			return r
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("restore %s did not finish", id)
+	return nil
+}
+
+// TestMaskedRestoreSQLite: suggestions from a restore test, a saved profile,
+// a masked restore into a new file, and fail-closed drift, through the API.
+func TestMaskedRestoreSQLite(t *testing.T) {
+	e := setup(t)
+	dir := filepath.Join(sqliteRoot, fmt.Sprintf("mask-%d", time.Now().UnixNano()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Base(dir)
+	src, err := sql.Open("sqlite", filepath.Join(dir, "shop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE, full_name TEXT, phone TEXT, plan TEXT NOT NULL DEFAULT 'free')`,
+		`CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), total REAL)`,
+		`CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id INTEGER REFERENCES users(id))`,
+		`INSERT INTO users (email, full_name, phone) VALUES ('ada@example.org', 'Ada Lovelace', '+44 20 7946 0958'), ('grace@navy.mil', 'Grace Hopper', NULL)`,
+		`INSERT INTO orders (user_id, total) VALUES (1, 10.5), (2, 20), (1, 7)`,
+		`INSERT INTO sessions VALUES ('s1', 1)`,
+	} {
+		if _, err := src.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	src.Close()
+
+	c := newClient(t, e)
+	register(t, c, "Masker")
+	r := c.do("POST", "/api/databases", map[string]any{"name": "shop", "engine": "sqlite", "database": rel + "/shop.db"})
+	dbID := r.data()["database"].(map[string]any)["id"].(string)
+	r = c.do("POST", "/api/storage", map[string]any{"name": "disk", "type": "local", "config": map[string]any{"path": "mask"}})
+	stID := r.data()["storage"].(map[string]any)["id"].(string)
+	backup := func() string {
+		t.Helper()
+		r := c.do("POST", "/api/backups", map[string]any{"database_id": dbID, "storage_destination_id": stID})
+		if r.Status != 202 {
+			t.Fatalf("backup: %d %s", r.Status, r.Raw)
+		}
+		if job := waitJob(t, c, r.data()["job_id"].(string), time.Minute); job["status"] != "completed" {
+			t.Fatalf("backup %v", job["error"])
+		}
+		return r.data()["backup_id"].(string)
+	}
+	backupID := backup()
+
+	// Before any restore test there's no schema to suggest from.
+	ed := c.do("GET", "/api/databases/"+dbID+"/masking", nil).data()
+	if ed["supported"] != true || ed["schema"] != nil {
+		t.Fatalf("editor before verification: %v", ed)
+	}
+	r = c.do("POST", "/api/backups/"+backupID+"/verify", map[string]any{})
+	waitJob(t, c, r.data()["job_id"].(string), time.Minute)
+	ed = c.do("GET", "/api/databases/"+dbID+"/masking", nil).data()
+	if ed["schema"] == nil || ed["suggested"] == nil {
+		t.Fatalf("editor after verification: %v", ed)
+	}
+	suggested := ed["suggested"].(map[string]any)["tables"].(map[string]any)
+	if suggested["sessions"] != "truncate" || suggested["users"].(map[string]any)["email"] != "email" {
+		t.Fatalf("suggested: %v", suggested)
+	}
+	if strings.Contains(string(c.do("GET", "/api/databases/"+dbID+"/masking", nil).Raw), "ada@example.org") {
+		t.Fatal("the editor must never return data")
+	}
+
+	// Bad rules are explained.
+	if r := c.do("PUT", "/api/databases/"+dbID+"/masking/profiles/default", map[string]any{"rules": map[string]any{"tables": map[string]any{"users": "drop"}}}); r.Status != 422 || !strings.Contains(string(r.Raw), "truncate") {
+		t.Fatalf("bad rules: %d %s", r.Status, r.Raw)
+	}
+	r = c.do("PUT", "/api/databases/"+dbID+"/masking/profiles/default", map[string]any{"rules": ed["suggested"]})
+	if r.Status != 200 || r.data()["profile"].(map[string]any)["version"] != float64(1) || len(r.data()["problems"].([]any)) != 0 {
+		t.Fatalf("save profile: %d %s", r.Status, r.Raw)
+	}
+
+	// Never overwrite the database the backup came from with fake data.
+	if r := c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "existing", "confirmation": "RESTORE", "masking_profile": "default"}); r.Status != 422 {
+		t.Fatalf("masked restore over the source: %d %s", r.Status, r.Raw)
+	}
+	if r := c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": rel + "/x.db", "masking_profile": "nope"}); r.Status != 422 {
+		t.Fatalf("unknown profile: %d %s", r.Status, r.Raw)
+	}
+
+	r = c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": rel + "/staging.db", "masking_profile": "default"})
+	if r.Status != 202 {
+		t.Fatalf("masked restore: %d %s", r.Status, r.Raw)
+	}
+	done := waitRestore(t, c, r.data()["id"].(string))
+	if done["status"] != "completed" || done["masking_profile"] != "default" || done["masking_profile_version"] != float64(1) {
+		t.Fatalf("masked restore: %v", done)
+	}
+	rep := done["masking_report"].(map[string]any)
+	if rep["checks_passed"].(float64) < 1 || rep["rows_changed"].(float64) < 3 {
+		t.Fatalf("report: %v", rep)
+	}
+	staging, _ := sql.Open("sqlite", filepath.Join(dir, "staging.db"))
+	defer staging.Close()
+	var real, orders, sessions int
+	_ = staging.QueryRow(`SELECT (SELECT count(*) FROM users WHERE email NOT LIKE 'user!_%@example.com' ESCAPE '!' OR full_name LIKE '%Lovelace%' OR phone LIKE '+44%'),
+		(SELECT count(*) FROM orders), (SELECT count(*) FROM sessions)`).Scan(&real, &orders, &sessions)
+	if real != 0 || orders != 3 || sessions != 0 {
+		t.Fatalf("staging: %d real rows, %d orders, %d sessions", real, orders, sessions)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "staging.db"))
+	if strings.Contains(string(raw), "ada@example.org") || strings.Contains(string(raw), "Lovelace") {
+		t.Fatal("real values in the staging file")
+	}
+
+	// Drift: a new personal column appears. The next masked restore stops
+	// before creating anything.
+	src, _ = sql.Open("sqlite", filepath.Join(dir, "shop.db"))
+	if _, err := src.Exec(`ALTER TABLE users ADD COLUMN recovery_email TEXT`); err != nil {
+		t.Fatal(err)
+	}
+	src.Close()
+	drifted := backup()
+	r = c.do("POST", "/api/restores", map[string]any{"backup_id": drifted, "target_database_id": dbID, "mode": "new", "new_database_name": rel + "/staging2.db", "masking_profile": "default"})
+	failed := waitRestore(t, c, r.data()["id"].(string))
+	if failed["status"] != "failed" || !strings.Contains(fmt.Sprint(failed["error"]), "users.recovery_email looks like personal data") {
+		t.Fatalf("drift must stop the restore: %v", failed)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "staging2.db")); !os.IsNotExist(err) {
+		t.Fatal("a stopped masked restore must not create the target")
+	}
+	// The editor now shows the problem for the saved profile.
+	probs := c.do("GET", "/api/databases/"+dbID+"/masking", nil).data()["problems"].(map[string]any)["default"].([]any)
+	if len(probs) != 1 {
+		t.Fatalf("problems: %v", probs)
+	}
+}
+
+// TestMaskedRestorePostgres runs a masked PostgreSQL restore through the API
+// with a server sandbox (the same one restore tests use).
+func TestMaskedRestorePostgres(t *testing.T) {
+	e := setup(t)
+	raw := os.Getenv("DBVAULT_TEST_SOURCE_URL")
+	if raw == "" {
+		t.Skip("DBVAULT_TEST_SOURCE_URL not set")
+	}
+	sb, err := restore.NewServerSandbox(raw, e.app.Postgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.app.Restores.Sandbox = sb
+	defer func() { e.app.Restores.Sandbox = nil }()
+
+	ctx := context.Background()
+	u, _ := url.Parse(raw)
+	pw, _ := u.User.Password()
+	port, _ := strconv.Atoi(u.Port())
+	admin, err := pgx.Connect(ctx, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	src := fmt.Sprintf("dbvault_mask_%d", time.Now().UnixNano())
+	staging := src + "_staging"
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+src); err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Exec(ctx, "DROP DATABASE IF EXISTS "+staging+" WITH (FORCE)")
+	defer admin.Exec(ctx, "DROP DATABASE IF EXISTS "+src+" WITH (FORCE)")
+	srcURL := *u
+	srcURL.Path = "/" + src
+	sc, err := pgx.Connect(ctx, srcURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sc.Exec(ctx, `
+		CREATE TABLE customers (id serial PRIMARY KEY, email text NOT NULL UNIQUE, full_name text, phone text);
+		CREATE TABLE invoices (id serial PRIMARY KEY, customer_id int NOT NULL REFERENCES customers(id), billing_email text, amount numeric);
+		INSERT INTO customers (email, full_name, phone) SELECT 'person' || g || '@real-company.io', 'Real Person ' || g, '+254 700 ' || g FROM generate_series(1, 50) g;
+		INSERT INTO invoices (customer_id, billing_email, amount) SELECT c.id, c.email, c.id * 3 FROM customers c;`); err != nil {
+		t.Fatal(err)
+	}
+	sc.Close(ctx)
+
+	c := newClient(t, e)
+	register(t, c, "PgMask")
+	r := c.do("POST", "/api/databases", map[string]any{"name": "billing", "host": u.Hostname(), "port": port, "database": src, "username": u.User.Username(), "password": pw, "ssl_mode": "disable"})
+	dbID := r.data()["database"].(map[string]any)["id"].(string)
+	r = c.do("POST", "/api/storage", map[string]any{"name": "disk", "type": "local", "config": map[string]any{"path": "pgmask"}})
+	stID := r.data()["storage"].(map[string]any)["id"].(string)
+	r = c.do("POST", "/api/backups", map[string]any{"database_id": dbID, "storage_destination_id": stID})
+	backupID := r.data()["backup_id"].(string)
+	if job := waitJob(t, c, r.data()["job_id"].(string), 2*time.Minute); job["status"] != "completed" {
+		t.Fatalf("backup: %v", job["error"])
+	}
+	r = c.do("POST", "/api/backups/"+backupID+"/verify", map[string]any{})
+	waitJob(t, c, r.data()["job_id"].(string), 2*time.Minute)
+	if v := c.do("GET", "/api/backups/"+backupID, nil).data()["backup"].(map[string]any)["verification_status"]; v != "passed" {
+		t.Fatalf("verification %v", v)
+	}
+	ed := c.do("GET", "/api/databases/"+dbID+"/masking", nil).data()
+	rules := ed["suggested"].(map[string]any)
+	// billing_email is a copy of the customer's email: mask it the same way.
+	rules["tables"].(map[string]any)["invoices"].(map[string]any)["billing_email"] = "email"
+	if r := c.do("PUT", "/api/databases/"+dbID+"/masking/profiles/default", map[string]any{"rules": rules}); r.Status != 200 {
+		t.Fatalf("save: %d %s", r.Status, r.Raw)
+	}
+	r = c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": staging, "masking_profile": "default"})
+	if r.Status != 202 {
+		t.Fatalf("masked restore: %d %s", r.Status, r.Raw)
+	}
+	if done := waitRestore(t, c, r.data()["id"].(string)); done["status"] != "completed" {
+		t.Fatalf("masked restore: %v", done)
+	}
+	stURL := *u
+	stURL.Path = "/" + staging
+	st, err := pgx.Connect(ctx, stURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close(ctx)
+	var leaked, mismatched, n int
+	if err := st.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM customers WHERE email LIKE '%real-company%' OR full_name LIKE 'Real Person%' OR phone LIKE '+254%'),
+		(SELECT count(*) FROM invoices i JOIN customers c ON c.id = i.customer_id WHERE i.billing_email <> c.email),
+		(SELECT count(*) FROM invoices)`).Scan(&leaked, &mismatched, &n); err != nil {
+		t.Fatal(err)
+	}
+	if leaked != 0 || mismatched != 0 || n != 50 {
+		t.Fatalf("staging: %d leaked, %d inconsistent, %d invoices", leaked, mismatched, n)
+	}
+	// The sandbox is gone: no dbvault_verify_* databases are left behind.
+	var sandboxes int
+	_ = admin.QueryRow(ctx, `SELECT count(*) FROM pg_database WHERE datname LIKE 'dbvault\_verify\_%'`).Scan(&sandboxes)
+	if sandboxes != 0 {
+		t.Fatalf("%d sandbox databases left behind", sandboxes)
 	}
 }
 
