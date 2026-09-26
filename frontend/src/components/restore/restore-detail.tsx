@@ -198,12 +198,16 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
                       <ArrowDown className="size-4" />
                     </div>
                     <Endpoint
-                      label={r.mode === "new" ? "Into new database" : "Over existing database"}
+                      label={`${r.mode === "new" ? "Into new" : "Over existing"} ${engineMeta(r.engine).fileBased ? "file" : "database"}`}
                       title={r.mode === "new" ? (r.new_database_name ?? "—") : r.target_database_name}
                       detail={
                         r.mode === "new"
-                          ? `on ${r.target_database_name}'s server`
-                          : engineMeta(r.engine).atomicRestore
+                          ? engineMeta(r.engine).fileBased
+                            ? "in the SQLite folder"
+                            : `on ${r.target_database_name}'s server`
+                          : engineMeta(r.engine).fileBased
+                            ? "file replaced atomically"
+                            : engineMeta(r.engine).atomicRestore
                             ? "objects replaced in one transaction"
                             : "objects dropped and recreated"
                       }
