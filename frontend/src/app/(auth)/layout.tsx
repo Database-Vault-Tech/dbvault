@@ -31,7 +31,12 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
         <div className="flex flex-1 items-center justify-center py-12">
           <div className="w-full max-w-sm">{children}</div>
         </div>
-        <p className="text-center text-xs text-muted-foreground">Open-source SQL database backups. Your database, your backups, your infrastructure.</p>
+        <p className="text-center text-xs text-muted-foreground">
+          Open-source SQL database backups. Your database, your backups, your infrastructure.{" "}
+          <Link href="/docs" className="font-medium text-foreground underline-offset-4 hover:underline">
+            Read the docs
+          </Link>
+        </p>
       </div>
       <aside className="relative hidden overflow-hidden border-l bg-muted/40 text-foreground lg:flex lg:flex-col lg:justify-between lg:p-12">
         <div className="absolute inset-0 bg-grid mask-radial opacity-60" aria-hidden />
