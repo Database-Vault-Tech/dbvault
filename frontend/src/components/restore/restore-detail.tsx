@@ -1,6 +1,6 @@
 "use client"
 
-import { AlertTriangle, ArrowDown, Check, CheckCircle2, Loader2, RotateCcw, Square, X, XCircle } from "lucide-react"
+import { AlertTriangle, ArrowDown, Check, CheckCircle2, EyeOff, Loader2, RotateCcw, Square, X, XCircle } from "lucide-react"
 import type { ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -20,21 +20,37 @@ import { useCancelJob, useRestore } from "@/lib/queries"
 import type { RestoreJob, RestoreStatus } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
-const STEPS: { key: RestoreStatus; label: string; hint: string }[] = [
+type Step = { key: string; label: string; hint: string }
+const STEPS: Step[] = [
   { key: "queued", label: "Queued", hint: "Waiting for a worker" },
   { key: "running", label: "Restoring", hint: "Download, verify, restore" },
   { key: "verifying", label: "Verifying", hint: "Checking restored tables" },
   { key: "completed", label: "Completed", hint: "Ready to use" },
 ]
-const ORDER: Record<string, number> = { queued: 0, running: 1, verifying: 2, completed: 3 }
-const ACTIVE = new Set(["queued", "running", "verifying"])
+// Masked restores anonymize in a sandbox before restoring into the target.
+const MASKED_STEPS: Step[] = [
+  STEPS[0],
+  { key: "masking", label: "Masking", hint: "Sandbox restore, mask, check" },
+  { key: "running", label: "Restoring", hint: "Masked copy into the target" },
+  STEPS[2],
+  STEPS[3],
+]
+const ACTIVE = new Set(["queued", "running", "masking", "verifying"])
 
-function Stepper({ status, failedAt }: { status: RestoreStatus; failedAt: number }) {
+/** Index of the step a restore is on. Masked restores are "running" twice:
+ * before masking (sandbox restore) and after (into the target). */
+function stepIndex(r: RestoreJob): number {
+  if (!r.masking_profile) return { queued: 0, running: 1, verifying: 2, completed: 3 }[r.status as string] ?? 0
+  if (r.status === "running") return r.masking_report ? 2 : 1
+  return { queued: 0, masking: 1, verifying: 3, completed: 4 }[r.status as string] ?? 0
+}
+
+function Stepper({ status, current: at, failedAt, steps }: { status: RestoreStatus; current: number; failedAt: number; steps: Step[] }) {
   const failed = status === "failed" || status === "cancelled"
-  const current = failed ? failedAt : (ORDER[status] ?? 0)
+  const current = failed ? failedAt : at
   return (
-    <ol className="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4">
-      {STEPS.map((s, i) => {
+    <ol className={cn("grid grid-cols-2 gap-x-3 gap-y-4", steps.length === 5 ? "sm:grid-cols-5" : "sm:grid-cols-4")}>
+      {steps.map((s, i) => {
         const done = status === "completed" || (!failed && i < current) || (failed && i < failedAt)
         const active = !failed && i === current && status !== "completed"
         const broken = failed && i === failedAt
@@ -135,8 +151,8 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
   const cancel = useCancelJob()
   const r = data?.restore
   const active = !!r && ACTIVE.has(r.status)
-  // A failed restore stopped either while restoring or while verifying.
-  const failedAt = r?.verification ? 2 : 1
+  // Where a failed restore stopped: masking, restoring, or verifying.
+  const failedAt = !r ? 1 : r.masking_profile ? (r.verification ? 3 : r.masking_report ? 2 : 1) : r.verification ? 2 : 1
 
   return (
     <Dialog open={!!id} onOpenChange={onOpenChange}>
@@ -166,7 +182,8 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
             </div>
 
             <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-5">
-              <Stepper status={r.status} failedAt={failedAt} />
+              <Stepper status={r.status} current={stepIndex(r)} failedAt={failedAt} steps={r.masking_profile ? MASKED_STEPS : STEPS} />
+              {r.masking_profile && <MaskingSummary r={r} />}
 
               {r.error && (
                 <Alert variant="destructive">
@@ -268,5 +285,40 @@ export function RestoreDetailDialog({ id, onOpenChange }: { id: string | null; o
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** What masking did (never data): rules per table and the checks that passed. */
+function MaskingSummary({ r }: { r: RestoreJob }) {
+  const rep = r.masking_report
+  return (
+    <div className="rounded-lg border border-brand/40 bg-brand/5 p-4">
+      <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
+        <EyeOff className="size-4 text-brand" /> Personal data masked
+        <span className="font-normal text-muted-foreground">
+          profile <span className="font-mono">{r.masking_profile}</span>
+          {r.masking_profile_version ? ` v${r.masking_profile_version}` : ""}
+        </span>
+      </div>
+      {rep ? (
+        <>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {formatNumber(rep.rows_changed)} rows changed in a sandbox and {rep.checks_passed} checks passed before anything reached {r.target_database_name}.
+          </p>
+          <ul className="mt-3 grid gap-1.5 text-xs sm:grid-cols-2">
+            {rep.tables.map((t) => (
+              <li key={t.table} className="min-w-0">
+                <span className="font-mono text-foreground">{t.table}</span>{" "}
+                <span className="text-muted-foreground">
+                  {t.action === "truncated" ? `emptied (${formatNumber(t.rows)} rows)` : `${formatNumber(t.rows)} rows · ${t.columns?.join(", ")}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <p className="mt-1 text-sm text-muted-foreground">The backup is restored into a sandbox and masked there; real values never reach {r.target_database_name}.</p>
+      )}
+    </div>
   )
 }

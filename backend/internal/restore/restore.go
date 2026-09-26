@@ -22,6 +22,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/encryption"
 	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
+	"github.com/dbvault/dbvault/backend/internal/masking/profile"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
 	"github.com/dbvault/dbvault/backend/internal/storage"
 	"github.com/dbvault/dbvault/backend/internal/validate"
@@ -39,6 +40,7 @@ type Service struct {
 	Keys         *encryption.KeyStore
 	Notify       *notifications.Service
 	Drivers      *engine.Registry
+	Profiles     *profile.Service
 	WorkDir      string
 	AppURL       string
 	// Sandbox is nil when restore testing is disabled.
@@ -68,11 +70,17 @@ type Job struct {
 	RequestedBy        *string         `json:"requested_by"`
 	RequestedByEmail   *string         `json:"requested_by_email"`
 	CreatedAt          time.Time       `json:"created_at"`
-	organizationID     string
+	// Set for masked restores: the profile used and what masking did.
+	MaskingProfile        *string         `json:"masking_profile"`
+	MaskingProfileVersion *int            `json:"masking_profile_version"`
+	MaskingReport         json.RawMessage `json:"masking_report"`
+	organizationID        string
+	sourceDatabaseID      string
 }
 
 const selectRestore = `SELECT r.id, r.organization_id, r.job_id, r.backup_id, b.created_at, sd.name, r.target_database_id, td.name, td.engine, r.mode,
-	r.new_database_name, r.status, r.error, r.verification, r.started_at, r.completed_at, r.duration_ms, r.requested_by, u.email, r.created_at
+	r.new_database_name, r.status, r.error, r.verification, r.started_at, r.completed_at, r.duration_ms, r.requested_by, u.email, r.created_at,
+	r.masking_profile_name, r.masking_profile_version, r.masking_report, b.database_id
 	FROM restore_jobs r
 	JOIN backups b ON b.id = r.backup_id
 	JOIN databases sd ON sd.id = b.database_id
@@ -83,7 +91,7 @@ func scanRestore(row pgx.Row) (Job, error) {
 	var j Job
 	err := row.Scan(&j.ID, &j.organizationID, &j.JobID, &j.BackupID, &j.BackupCreatedAt, &j.SourceDatabaseName, &j.TargetDatabaseID, &j.TargetDatabaseName,
 		&j.Engine, &j.Mode, &j.NewDatabaseName, &j.Status, &j.Error, &j.Verification, &j.StartedAt, &j.CompletedAt, &j.DurationMs, &j.RequestedBy,
-		&j.RequestedByEmail, &j.CreatedAt)
+		&j.RequestedByEmail, &j.CreatedAt, &j.MaskingProfile, &j.MaskingProfileVersion, &j.MaskingReport, &j.sourceDatabaseID)
 	return j, err
 }
 
@@ -146,6 +154,9 @@ type CreateInput struct {
 	Mode             string `json:"mode"`
 	NewDatabaseName  string `json:"new_database_name"`
 	Confirmation     string `json:"confirmation"`
+	// MaskingProfile names a masking profile of the backup's database: the
+	// backup is masked in a sandbox and only the masked copy is restored.
+	MaskingProfile string `json:"masking_profile"`
 }
 
 // Create validates and queues a restore. Restoring over an existing
@@ -177,6 +188,24 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 		return Job{}, apperr.Validation(map[string]string{"target_database_id": fmt.Sprintf(
 			"This backup was taken from a %s database and can only be restored into a %s database.", engineLabel(s.Drivers, b.Engine), engineLabel(s.Drivers, b.Engine))})
 	}
+	var maskingProfileID *string
+	if in.MaskingProfile != "" {
+		if in.Mode == "existing" && target.ID == b.DatabaseID {
+			return Job{}, apperr.Validation(map[string]string{"masking_profile": fmt.Sprintf(
+				"A masked restore can't overwrite %s, the database this backup came from. Restore into a new database, or choose another target.", target.Name)})
+		}
+		if ok, reason := s.Profiles.Supported(b.Engine); !ok {
+			return Job{}, apperr.Validation(map[string]string{"masking_profile": reason})
+		}
+		if !fileBased(s.Drivers, b.Engine) && s.Sandbox == nil {
+			return Job{}, apperr.Validation(map[string]string{"masking_profile": "Masked restores run in a restore sandbox, and restore testing is disabled on this server (VERIFY_MODE)."})
+		}
+		p, err := s.Profiles.Get(ctx, orgID, b.DatabaseID, in.MaskingProfile)
+		if err != nil {
+			return Job{}, apperr.Validation(map[string]string{"masking_profile": fmt.Sprintf("There's no masking profile named %q for %s.", in.MaskingProfile, b.DatabaseName)})
+		}
+		maskingProfileID = &p.ID
+	}
 	if in.Mode == "new" {
 		// A new SQLite "database" is a file path in the SQLite folder;
 		// everything else creates a database on the target's server.
@@ -200,7 +229,7 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 			return err
 		}
 		var busy bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM restore_jobs WHERE target_database_id = $1 AND status IN ('queued', 'running', 'verifying'))`, target.ID).Scan(&busy); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM restore_jobs WHERE target_database_id = $1 AND status IN ('queued', 'running', 'masking', 'verifying'))`, target.ID).Scan(&busy); err != nil {
 			return err
 		}
 		if busy {
@@ -210,8 +239,13 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 		if in.Mode == "new" {
 			newName = &in.NewDatabaseName
 		}
-		if err := tx.QueryRow(ctx, `INSERT INTO restore_jobs (organization_id, backup_id, target_database_id, mode, new_database_name, requested_by)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`, orgID, b.ID, target.ID, in.Mode, newName, userID).Scan(&restoreID); err != nil {
+		var profileName *string
+		if maskingProfileID != nil {
+			profileName = &in.MaskingProfile
+		}
+		if err := tx.QueryRow(ctx, `INSERT INTO restore_jobs (organization_id, backup_id, target_database_id, mode, new_database_name, requested_by,
+			masking_profile_id, masking_profile_name)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`, orgID, b.ID, target.ID, in.Mode, newName, userID, maskingProfileID, profileName).Scan(&restoreID); err != nil {
 			return err
 		}
 		j, err := s.Queue.Create(ctx, tx, jobs.Spec{OrganizationID: orgID, Type: jobs.TypeRestore, Payload: map[string]string{"restore_id": restoreID, "backup_id": b.ID}, CreatedBy: userID})
@@ -227,7 +261,8 @@ func (s *Service) Create(ctx context.Context, orgID, userID string, in CreateInp
 			dest = *newName
 		}
 		return audit.Record(ctx, tx, audit.Entry{OrgID: orgID, Action: audit.RestoreStarted, ResourceType: "restore", ResourceID: restoreID,
-			Metadata: map[string]any{"backup_id": b.ID, "source_database": b.DatabaseName, "target_database": target.Name, "target_db_name": dest, "mode": in.Mode}})
+			Metadata: map[string]any{"backup_id": b.ID, "source_database": b.DatabaseName, "target_database": target.Name, "target_db_name": dest, "mode": in.Mode,
+				"masking_profile": in.MaskingProfile}})
 	})
 	if err != nil {
 		return Job{}, err
@@ -431,6 +466,20 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	}
 	log.Infof("Backup contains %d tables", len(tbls))
 
+	// A masked restore masks the backup in a sandbox first, before the
+	// target is touched: if masking stops (schema drift, a failed check),
+	// nothing has been created or overwritten.
+	var masked *maskedCopy
+	if r.MaskingProfile != nil {
+		masked, err = s.maskInSandbox(ctx, r, b, drv, src, log)
+		if masked != nil {
+			defer masked.destroy(log)
+		}
+		if err != nil {
+			return TableCheck{}, err
+		}
+	}
+
 	dbName := target.Database
 	opts := engine.RestoreOptions{Atomic: true}
 	createdDB := false
@@ -458,7 +507,12 @@ func (s *Service) restore(ctx context.Context, r Job, log *jobs.Logger) (TableCh
 	default:
 		log.Infof("Running %s restore into %q", drv.Label(), dbName)
 	}
-	if err := runRestore(ctx, drv, src, target, dbName, opts, log); err != nil {
+	if masked != nil {
+		err = masked.restoreInto(ctx, drv, target, dbName, opts, log)
+	} else {
+		err = runRestore(ctx, drv, src, target, dbName, opts, log)
+	}
+	if err != nil {
 		if createdDB {
 			dropCreated(drv, target, dbName, log)
 		}
@@ -692,6 +746,15 @@ func (s *Service) verify(ctx context.Context, b backups.Backup, log *jobs.Logger
 	}
 	rep.Restore = Check{Status: CheckPass, Message: "Restore completed without errors in " + time.Since(restoreStart).Round(time.Second).String()}
 	log.Infof("Restore into sandbox completed")
+
+	// The restored schema (never data) powers masking suggestions.
+	if c, ok := drv.(engine.Cataloger); ok {
+		if cat, err := c.Catalog(ctx, inst.Target, inst.DBName); err == nil {
+			if err := profile.RecordCatalog(ctx, s.Pool, b.ID, cat); err != nil {
+				log.Warnf("Could not record the backup's schema: %v", err)
+			}
+		}
+	}
 
 	// 7. Verification queries.
 	check, err := drv.CheckTables(ctx, inst.Target, inst.DBName, tbls, true)

@@ -20,6 +20,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/auth"
 	"github.com/dbvault/dbvault/backend/internal/httpx"
 	"github.com/dbvault/dbvault/backend/internal/logging"
+	"github.com/dbvault/dbvault/backend/internal/masking/profile"
 	"github.com/dbvault/dbvault/backend/internal/reqctx"
 	"github.com/dbvault/dbvault/backend/internal/restore"
 	"github.com/dbvault/dbvault/backend/internal/worker"
@@ -84,6 +85,10 @@ func NewRouter(a *app.App) http.Handler {
 				a.Schedules.Routes(r)
 				a.Backups.Routes(r)
 				a.Restores.Routes(r)
+				(&profile.Handlers{Svc: a.Profiles, Database: func(r *http.Request, orgID, id string) (string, error) {
+					d, err := a.Databases.Get(r.Context(), orgID, id)
+					return d.Engine, err
+				}}).Routes(r)
 				a.Notifications.Routes(r)
 				a.Queue.Routes(r)
 				r.Get("/audit-logs", auditLogsHandler(a))

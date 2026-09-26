@@ -50,6 +50,7 @@ Checksum: 9f2c4e1a…
 | **Checksums** | SHA-256 of every stored artifact, re-verified by reading the object back after upload, and again before every restore. |
 | **Restore verification** | Download → checksum → decrypt → decompress → restore into a temporary database of the same engine (Docker container or sandbox server) → query every table → destroy. Honest when unavailable. |
 | **Restore** | Into a new database, or over an existing one (type `RESTORE` to confirm). PostgreSQL restores run in a single transaction (all-or-nothing); MySQL/MariaDB can't, and the wizard says so. |
+| **Data masking** | Anonymized restores into staging: personal data is replaced with consistent, realistic fakes inside a sandbox, and new unmasked columns stop the run. PostgreSQL and SQLite. See [docs/masking.md](docs/masking.md). |
 | **Retention** | Grandfather-father-son policies (daily / weekly / monthly) with a preview of exactly what will be kept and deleted. |
 | **Notifications** | Email and HMAC-signed webhooks for failures, successes, restores and storage problems. Slack/Discord-ready sender interface. |
 | **Teams & audit log** | Organizations, owner/admin/member/viewer roles, invitations, and an append-only audit log of every sensitive action. |

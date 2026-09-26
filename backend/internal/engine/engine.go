@@ -236,3 +236,36 @@ func LocalhostHint(host string, err error) error {
 	return fmt.Errorf("%w. DBVault runs in Docker, so %q refers to the DBVault container itself: "+
 		"use host.docker.internal for a database on this machine, or the database container's name if it shares a Docker network", err, host)
 }
+
+// Catalog describes a database's tables and columns: what masking rules are
+// checked against, recorded on backups during restore tests.
+type Catalog struct {
+	Tables []CatalogTable `json:"tables"`
+}
+
+// CatalogTable is one table. References lists the tables its foreign keys
+// point at, as Table.String() values.
+type CatalogTable struct {
+	Schema     string          `json:"schema,omitempty"`
+	Name       string          `json:"name"`
+	Columns    []CatalogColumn `json:"columns"`
+	References []string        `json:"references,omitempty"`
+}
+
+func (t CatalogTable) Table() Table { return Table{Schema: t.Schema, Name: t.Name} }
+
+// CatalogColumn is one column. Key is true for primary- and foreign-key
+// columns; Unique for columns in any unique constraint or index.
+type CatalogColumn struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	Nullable  bool   `json:"nullable"`
+	Key       bool   `json:"key,omitempty"`
+	Unique    bool   `json:"unique,omitempty"`
+	MaxLength int    `json:"max_length,omitempty"`
+}
+
+// Cataloger is implemented by drivers that can describe a database's schema.
+type Cataloger interface {
+	Catalog(ctx context.Context, t Target, dbName string) (Catalog, error)
+}

@@ -22,6 +22,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/engine/postgres"
 	"github.com/dbvault/dbvault/backend/internal/engine/sqlite"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
+	"github.com/dbvault/dbvault/backend/internal/masking/profile"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
 	"github.com/dbvault/dbvault/backend/internal/organizations"
 	"github.com/dbvault/dbvault/backend/internal/pgtools"
@@ -51,6 +52,7 @@ type App struct {
 	Notifications *notifications.Service
 	Backups       *backups.Service
 	Restores      *restore.Service
+	Profiles      *profile.Service
 	Schedules     *scheduler.Service
 	Tools         pgtools.Tools
 	Postgres      *postgres.Driver
@@ -127,8 +129,9 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 	a.Backups = &backups.Service{Pool: pool, Queue: a.Queue, Databases: a.Databases, Destinations: a.Destinations, Keys: a.Keys,
 		Notify: a.Notifications, AppURL: cfg.AppURL, WorkDir: cfg.WorkDir,
 		Engine: &backups.Engine{Drivers: a.Drivers, VerifyUpload: cfg.VerifyUploadedData}}
+	a.Profiles = &profile.Service{Pool: pool, Sealer: sealer, Drivers: a.Drivers}
 	a.Restores = &restore.Service{Pool: pool, Queue: a.Queue, Backups: a.Backups, Databases: a.Databases, Destinations: a.Destinations,
-		Keys: a.Keys, Notify: a.Notifications, Drivers: a.Drivers, WorkDir: cfg.WorkDir, AppURL: cfg.AppURL}
+		Keys: a.Keys, Notify: a.Notifications, Drivers: a.Drivers, Profiles: a.Profiles, WorkDir: cfg.WorkDir, AppURL: cfg.AppURL}
 	a.Schedules = &scheduler.Service{Pool: pool, Backups: a.Backups}
 	return a, nil
 }

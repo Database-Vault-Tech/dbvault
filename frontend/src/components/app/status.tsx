@@ -11,6 +11,7 @@ const TONE_BY_STATUS: Record<string, Tone> = {
   ok: "success",
   running: "running",
   verifying: "running",
+  masking: "running",
   queued: "queued",
   pending: "queued",
   failed: "error",
@@ -31,6 +32,7 @@ const LABELS: Record<string, string> = {
   pass: "Pass",
   fail: "Fail",
   unavailable: "Unavailable",
+  masking: "Masking",
 }
 
 // Flat tinted pills, matching the landing page's "Available" / "Coming soon" chips.

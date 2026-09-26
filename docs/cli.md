@@ -49,6 +49,8 @@ dbvault backup list [--database name] [--limit 20]
 dbvault backup verify <backup-id>            full restore test
 dbvault restore <backup-id> --new-database <name>
 dbvault restore <backup-id> --existing       overwrite (asks you to type RESTORE)
+dbvault restore <backup-id> ... --mask default   anonymize first (see Data masking)
+dbvault masking suggest | show | apply <database>
 dbvault storage list
 dbvault schedule list
 dbvault version
@@ -93,3 +95,13 @@ dbvault restore 3f2a… --existing --confirm RESTORE          # overwrite, non-i
 ```
 
 Use `--target <database>` to restore into a different database of the same engine.
+
+### Anonymized restores
+
+```bash
+dbvault masking suggest production > masking.yaml    # rules for personal-looking columns
+dbvault masking apply production -f masking.yaml     # save them (prints any problems)
+dbvault restore 3f2a… --target staging --existing --mask default
+```
+
+See [Data masking](masking.md).

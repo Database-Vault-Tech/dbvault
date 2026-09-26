@@ -18,6 +18,7 @@ var restoreFlags struct {
 	newDatabase string
 	existing    bool
 	confirm     string
+	mask        string
 }
 
 var restoreCmd = &cobra.Command{
@@ -31,7 +32,11 @@ Into a new database on the target server (safe):
 
 Over the existing database (destructive — objects in the backup are dropped
 and recreated; you must type RESTORE or pass --confirm RESTORE):
-  dbvault restore 1f2e3d4c --target staging --existing`,
+  dbvault restore 1f2e3d4c --target staging --existing
+
+Anonymized, for staging and development (see "dbvault masking"): the backup is
+masked in a sandbox and only the masked copy reaches the target:
+  dbvault restore 1f2e3d4c --target staging --existing --mask default`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -61,6 +66,9 @@ and recreated; you must type RESTORE or pass --confirm RESTORE):
 			return errors.New("choose exactly one of --new-database <name> or --existing")
 		}
 		req := map[string]any{"backup_id": backupID, "target_database_id": target.ID}
+		if restoreFlags.mask != "" {
+			req["masking_profile"] = restoreFlags.mask
+		}
 		if restoreFlags.existing {
 			req["mode"] = "existing"
 			confirm := restoreFlags.confirm
@@ -116,6 +124,9 @@ and recreated; you must type RESTORE or pass --confirm RESTORE):
 			dest = *view.Restore.NewDatabaseName
 		}
 		fmt.Printf("\n%s Restored into %s on %s\n", ui.Green("✓"), ui.Bold(dest), target.Host)
+		if r := view.Restore; r.MaskingProfile != nil && r.MaskingReport != nil {
+			fmt.Printf("  Masked with profile %q: %d rows changed, %d checks passed\n", *r.MaskingProfile, r.MaskingReport.RowsChanged, r.MaskingReport.Checks)
+		}
 		return nil
 	},
 }
@@ -126,5 +137,6 @@ func init() {
 	f.StringVar(&restoreFlags.newDatabase, "new-database", "", "create this database on the target server and restore into it")
 	f.BoolVar(&restoreFlags.existing, "existing", false, "restore over the target database (destructive)")
 	f.StringVar(&restoreFlags.confirm, "confirm", "", `pass "RESTORE" to confirm a destructive restore non-interactively`)
+	f.StringVar(&restoreFlags.mask, "mask", "", "anonymize with this masking profile (e.g. default) before restoring")
 	rootCmd.AddCommand(restoreCmd)
 }
