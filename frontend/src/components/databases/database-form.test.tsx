@@ -38,7 +38,35 @@ describe("DatabaseForm", () => {
     await userEvent.click(screen.getByRole("button", { name: /test connection/i }))
     expect(await screen.findByText("Connection successful")).toBeInTheDocument()
     expect(screen.getByText("PostgreSQL 17.2")).toBeInTheDocument()
-    expect(calls[0].body).toMatchObject({ host: "db.internal", port: 6543, database: "shop", username: "app", password: "pa$$word", ssl_mode: "require" })
+    const testCall = calls.find((c) => c.method === "POST" && c.url === "/api/databases/test")
+    expect(testCall?.body).toMatchObject({ host: "db.internal", port: 6543, database: "shop", username: "app", password: "pa$$word", ssl_mode: "require" })
+  })
+
+  it("asks SQLite for a file path only, and explains when SQLite isn't set up", async () => {
+    const calls = mockFetch({
+      "GET /api/database-engines": () => ({
+        body: { data: [{ name: "sqlite", label: "SQLite", default_port: 0, capabilities: { file_based: true }, available: false, unavailable_reason: "Set SQLITE_ROOT first." }] },
+      }),
+      "POST /api/databases/test": () => ({ body: { data: { ok: false, message: "Set SQLITE_ROOT first.", tested_at: new Date().toISOString() } } }),
+    })
+    renderWithProviders(<DatabaseForm mode="create" submitLabel="Save database" onSubmit={vi.fn()} />)
+    await userEvent.click(screen.getByRole("radio", { name: /SQLite/ }))
+
+    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Username")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/connection string/i)).not.toBeInTheDocument()
+    expect(await screen.findByText("SQLite isn't set up on this server yet")).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText("Name"), "lite")
+    await userEvent.type(screen.getByLabelText("Database file"), "../escape.db")
+    await userEvent.click(screen.getByRole("button", { name: /test connection/i }))
+    expect(await screen.findByText(/no leading \/, no \.\./)).toBeInTheDocument()
+
+    await userEvent.clear(screen.getByLabelText("Database file"))
+    await userEvent.type(screen.getByLabelText("Database file"), "myapp/app.db")
+    await userEvent.click(screen.getByRole("button", { name: /test connection/i }))
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/databases/test")).toBe(true))
+    expect(calls.find((c) => c.url === "/api/databases/test")?.body).toMatchObject({ engine: "sqlite", database: "myapp/app.db", host: "", port: 0, username: "" })
   })
 
   it("shows the reason when the connection fails", async () => {
