@@ -18,11 +18,11 @@ const COLUMNS = [
   {
     title: "Docs",
     links: [
-      { label: "README", href: DOCS_URL },
-      { label: "Architecture", href: `${GITHUB_URL}/blob/main/docs/architecture.md` },
-      { label: "Storage", href: `${GITHUB_URL}/blob/main/docs/storage.md` },
-      { label: "Security", href: `${GITHUB_URL}/blob/main/docs/security.md` },
-      { label: "Restore", href: `${GITHUB_URL}/blob/main/docs/restore.md` },
+      { label: "Getting started", href: `${DOCS_URL}/getting-started` },
+      { label: "Database engines", href: `${DOCS_URL}/engines` },
+      { label: "Storage", href: `${DOCS_URL}/storage` },
+      { label: "Security", href: `${DOCS_URL}/security` },
+      { label: "CLI", href: `${DOCS_URL}/cli` },
     ],
   },
   {

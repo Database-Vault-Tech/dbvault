@@ -52,6 +52,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.image }}
+          # The frontend renders docs/*.md into its /docs pages (unused by the backend).
+          build-contexts: docs=./docs
           # Set DEPLOY_PLATFORMS to linux/arm64 for an Ampere/Graviton VPS.
           platforms: ${{ vars.DEPLOY_PLATFORMS || 'linux/amd64' }}
           push: true

@@ -45,6 +45,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
+          # The frontend renders docs/*.md into its /docs pages (unused by the backend).
+          build-contexts: docs=./docs
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}

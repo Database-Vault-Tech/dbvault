@@ -13,6 +13,10 @@ ARG SITE_URL=https://dbvault.tech
 ENV SITE_URL=${SITE_URL}
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# The /docs pages are rendered from the repository's docs/*.md at build time.
+# They come from the "docs" build context (docker compose and the workflows
+# pass it), landing at /docs, i.e. ../docs from /app as in a checkout.
+COPY --from=docs . /docs
 RUN npm run build
 
 FROM node:22-alpine AS runtime

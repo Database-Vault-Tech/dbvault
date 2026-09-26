@@ -69,8 +69,9 @@ docker compose up -d
 
 Open **http://localhost:3000**, create an account, and follow the checklist on the dashboard:
 
-1. **Add a database**: pick PostgreSQL, MySQL or MariaDB, then host, port, credentials and
-   SSL mode. Click *Test Connection* to see the server version before saving.
+1. **Add a database**: pick PostgreSQL, MySQL, MariaDB or SQLite, then host, port,
+   credentials and SSL mode (or, for SQLite, the file's path). Click *Test Connection* to
+   check it before saving.
 2. **Add storage**: one click for the bundled MinIO, or your own S3 / R2 / MinIO bucket.
 3. **Create a schedule**: frequency, retention, compression, encryption and optional
    automatic restore tests.
