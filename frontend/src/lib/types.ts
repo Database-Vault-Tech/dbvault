@@ -51,6 +51,17 @@ export interface ConnectionTest {
 
 export type DatabaseEngine = "postgres" | "mysql" | "mariadb" | "sqlserver" | "sqlite"
 
+/** GET /database-engines: what this DBVault instance can back up. */
+export interface EngineInfo {
+  name: DatabaseEngine
+  label: string
+  default_port: number
+  capabilities: { atomic_restore: boolean; schemas: boolean; file_based: boolean }
+  /** False when the engine needs instance configuration (SQLite needs SQLITE_ROOT). */
+  available: boolean
+  unavailable_reason?: string
+}
+
 export interface Database {
   id: string
   organization_id: string
