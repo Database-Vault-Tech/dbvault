@@ -23,6 +23,7 @@ var engines = map[string]struct {
 	"postgres": {"PostgreSQL", "postgres", "postgres", 5432},
 	"mysql":    {"MySQL", "", "root", 3306},
 	"mariadb":  {"MariaDB", "", "root", 3306},
+	"sqlite":   {"SQLite", "", "", 0},
 }
 
 var databaseCmd = &cobra.Command{
@@ -66,7 +67,11 @@ var databaseListCmd = &cobra.Command{
 			if d.NextRunAt != nil {
 				next = ui.Ago(d.NextRunAt)
 			}
-			t.Row(ui.Bold(d.Name), fmt.Sprintf("%s@%s:%d/%s", d.Username, d.Host, d.Port, d.Database), engineVersion(d.Engine, d.PGVersion), prot, last, next, ui.Bytes(d.StorageBytes))
+			where := fmt.Sprintf("%s@%s:%d/%s", d.Username, d.Host, d.Port, d.Database)
+			if d.Engine == "sqlite" {
+				where = d.Database // a file in the server's SQLite folder
+			}
+			t.Row(ui.Bold(d.Name), where, engineVersion(d.Engine, d.PGVersion), prot, last, next, ui.Bytes(d.StorageBytes))
 		}
 		t.Flush()
 		return nil
@@ -74,20 +79,21 @@ var databaseListCmd = &cobra.Command{
 }
 
 var addFlags struct {
-	engine, name, host, database, username, sslMode, connURL string
-	port                                                     int
-	passwordStdin                                            bool
+	engine, name, host, database, username, sslMode, connURL, file string
+	port                                                           int
+	passwordStdin                                                  bool
 }
 
 var databaseAddCmd = &cobra.Command{
 	Use:   "add",
-	Short: "Add a PostgreSQL, MySQL or MariaDB database",
-	Long: `Add a PostgreSQL, MySQL or MariaDB database. The connection is tested before it's saved.
+	Short: "Add a PostgreSQL, MySQL, MariaDB or SQLite database",
+	Long: `Add a PostgreSQL, MySQL, MariaDB or SQLite database. The connection is tested before it's saved.
 
   dbvault database add --name production --url "postgres://app@db.internal:5432/shop?sslmode=require"
   dbvault database add --name shop --url "mysql://app@mysql.internal:3306/shop"
   echo "$PGPASSWORD" | dbvault database add --name production --host db.internal --database shop --username app --password-stdin
   dbvault database add --engine mariadb --name shop --host maria.internal --database shop --username app
+  dbvault database add --name blog --file myapp/app.db   # SQLite: a path inside the server's SQLite folder
 
 Missing values are prompted for. Passwords are never accepted as flags (they
 would leak into shell history and process listings).`,
@@ -123,47 +129,64 @@ would leak into shell history and process listings).`,
 				ssl = s
 			}
 		}
+		if engine == "" && addFlags.file != "" {
+			engine = "sqlite"
+		}
 		if engine == "" {
 			engine = "postgres"
 		}
 		eng, ok := engines[engine]
 		if !ok {
-			return fmt.Errorf("--engine must be postgres, mysql or mariadb (got %q)", engine)
+			return fmt.Errorf("--engine must be postgres, mysql, mariadb or sqlite (got %q)", engine)
 		}
 		name := addFlags.name
 		if name == "" {
 			name = ui.Prompt("Name (e.g. production)", "")
 		}
-		if host == "" {
-			host = ui.Prompt("Host", "localhost")
-		}
-		if port == 0 {
-			port = eng.port
-		}
-		if dbname == "" {
-			dbname = ui.Prompt("Database", eng.database)
-		}
-		if user == "" {
-			user = ui.Prompt("Username", eng.user)
-		}
-		if pass == "" {
-			if addFlags.passwordStdin {
-				line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-				if err != nil && line == "" {
-					return errors.New("no password on stdin")
-				}
-				pass = strings.TrimRight(line, "\r\n")
-			} else {
-				pass, err = ui.PromptSecret("Password")
-				if err != nil {
-					return err
+		var in map[string]any
+		if engine == "sqlite" {
+			// A file inside the folder mounted into DBVault (SQLITE_ROOT): no
+			// host, login or password.
+			file := addFlags.file
+			if file == "" {
+				file = dbname
+			}
+			if file == "" {
+				file = ui.Prompt("File (path inside the server's SQLite folder, e.g. myapp/app.db)", "")
+			}
+			in = map[string]any{"engine": engine, "name": name, "database": file}
+		} else {
+			if host == "" {
+				host = ui.Prompt("Host", "localhost")
+			}
+			if port == 0 {
+				port = eng.port
+			}
+			if dbname == "" {
+				dbname = ui.Prompt("Database", eng.database)
+			}
+			if user == "" {
+				user = ui.Prompt("Username", eng.user)
+			}
+			if pass == "" {
+				if addFlags.passwordStdin {
+					line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+					if err != nil && line == "" {
+						return errors.New("no password on stdin")
+					}
+					pass = strings.TrimRight(line, "\r\n")
+				} else {
+					pass, err = ui.PromptSecret("Password")
+					if err != nil {
+						return err
+					}
 				}
 			}
+			if ssl == "" {
+				ssl = "prefer"
+			}
+			in = map[string]any{"engine": engine, "name": name, "host": host, "port": port, "database": dbname, "username": user, "password": pass, "ssl_mode": ssl}
 		}
-		if ssl == "" {
-			ssl = "prefer"
-		}
-		in := map[string]any{"engine": engine, "name": name, "host": host, "port": port, "database": dbname, "username": user, "password": pass, "ssl_mode": ssl}
 
 		fmt.Println(ui.Dim("Testing connection…"))
 		var test client.ConnectionTest
@@ -258,12 +281,13 @@ var databaseTestCmd = &cobra.Command{
 
 func init() {
 	f := databaseAddCmd.Flags()
-	f.StringVar(&addFlags.engine, "engine", "", "postgres|mysql|mariadb (default postgres, or taken from --url)")
+	f.StringVar(&addFlags.engine, "engine", "", "postgres|mysql|mariadb|sqlite (default postgres, or taken from --url)")
 	f.StringVar(&addFlags.name, "name", "", "display name, e.g. production")
 	f.StringVar(&addFlags.connURL, "url", "", "postgres://, mysql:// or mariadb:// connection string")
 	f.StringVar(&addFlags.host, "host", "", "hostname or IP")
 	f.IntVar(&addFlags.port, "port", 0, "port (default 5432 for PostgreSQL, 3306 for MySQL/MariaDB)")
 	f.StringVar(&addFlags.database, "database", "", "database name")
+	f.StringVar(&addFlags.file, "file", "", "SQLite: path of the database file inside the server's SQLite folder (implies --engine sqlite)")
 	f.StringVar(&addFlags.username, "username", "", "username")
 	f.StringVar(&addFlags.sslMode, "ssl-mode", "", "disable|allow|prefer|require|verify-ca|verify-full (default prefer; MySQL/MariaDB: disable|prefer|require|verify-full)")
 	f.BoolVar(&addFlags.passwordStdin, "password-stdin", false, "read the password from stdin")
