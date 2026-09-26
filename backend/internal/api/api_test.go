@@ -3,6 +3,10 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base32"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -438,6 +442,142 @@ func TestAPITokens(t *testing.T) {
 	cli.token = "dbv_invalid"
 	if r := cli.do("GET", "/api/databases", nil); r.Status != 401 {
 		t.Fatalf("invalid token: %d", r.Status)
+	}
+}
+
+// totpAt is an independent RFC 6238 implementation (SHA-1, 6 digits, 30 s)
+// standing in for an authenticator app.
+func totpAt(t *testing.T, secret string, step int64) string {
+	t.Helper()
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var msg [8]byte
+	binary.BigEndian.PutUint64(msg[:], uint64(step))
+	m := hmac.New(sha1.New, key)
+	m.Write(msg[:])
+	sum := m.Sum(nil)
+	off := sum[len(sum)-1] & 0x0f
+	return fmt.Sprintf("%06d", (binary.BigEndian.Uint32(sum[off:off+4])&0x7fffffff)%1_000_000)
+}
+
+func TestTwoFactorAuthentication(t *testing.T) {
+	e := setup(t)
+	c := newClient(t, e)
+	email, _ := register(t, c, "Totp")
+	const pw = "correct-horse-battery"
+
+	if r := c.do("POST", "/api/auth/2fa/setup", map[string]string{"password": "wrong-password-123"}); r.Status != 422 {
+		t.Fatalf("setup must re-check the password: %d %s", r.Status, r.Raw)
+	}
+	r := c.do("POST", "/api/auth/2fa/setup", map[string]string{"password": pw})
+	if r.Status != 200 {
+		t.Fatalf("setup: %d %s", r.Status, r.Raw)
+	}
+	secret := r.data()["secret"].(string)
+	if uri := r.data()["otpauth_uri"].(string); !strings.HasPrefix(uri, "otpauth://totp/DBVault:") || !strings.Contains(uri, "secret="+secret) {
+		t.Fatalf("otpauth uri: %s", uri)
+	}
+	// Setting up is not enabling: sign-in is unchanged until a code is confirmed.
+	if r := newClient(t, e).do("POST", "/api/auth/login", map[string]string{"email": email, "password": pw}); r.data()["mfa_required"] != nil {
+		t.Fatalf("2FA must not apply before it is confirmed: %s", r.Raw)
+	}
+	var sealed string
+	if err := e.app.Pool.QueryRow(context.Background(), `SELECT totp_secret_encrypted FROM users WHERE email = $1`, email).Scan(&sealed); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(sealed, "v1.") || strings.Contains(sealed, secret) {
+		t.Fatalf("TOTP secret must be sealed at rest: %s", sealed)
+	}
+
+	step := time.Now().Unix() / 30
+	if r := c.do("POST", "/api/auth/2fa/enable", map[string]string{"code": "000000"}); r.Status != 422 {
+		t.Fatalf("wrong code must not enable 2FA: %d %s", r.Status, r.Raw)
+	}
+	r = c.do("POST", "/api/auth/2fa/enable", map[string]string{"code": totpAt(t, secret, step)})
+	if r.Status != 200 {
+		t.Fatalf("enable: %d %s", r.Status, r.Raw)
+	}
+	codes := r.data()["recovery_codes"].([]any)
+	if len(codes) != 10 {
+		t.Fatalf("expected 10 recovery codes, got %d", len(codes))
+	}
+	if st := c.do("GET", "/api/auth/2fa", nil).data(); st["enabled"] != true || st["recovery_codes_remaining"] != float64(10) {
+		t.Fatalf("status: %v", st)
+	}
+
+	// Password alone no longer creates a session.
+	b := newClient(t, e)
+	r = b.do("POST", "/api/auth/login", map[string]string{"email": email, "password": pw})
+	if r.Status != 200 || r.data()["mfa_required"] != true {
+		t.Fatalf("login must require a code: %d %s", r.Status, r.Raw)
+	}
+	mfaToken := r.data()["mfa_token"].(string)
+	if r := b.do("GET", "/api/me", nil); r.Status != 401 {
+		t.Fatalf("no session may exist before the second factor: %d", r.Status)
+	}
+	// The code that enabled 2FA was consumed and can't be replayed.
+	if r := b.do("POST", "/api/auth/login/2fa", map[string]string{"mfa_token": mfaToken, "code": totpAt(t, secret, step)}); r.Status != 422 {
+		t.Fatalf("replayed code accepted: %d %s", r.Status, r.Raw)
+	}
+	if r := b.do("POST", "/api/auth/login/2fa", map[string]string{"mfa_token": mfaToken, "code": totpAt(t, secret, step+1)}); r.Status != 200 {
+		t.Fatalf("2fa login: %d %s", r.Status, r.Raw)
+	}
+	if r := b.do("GET", "/api/me", nil); r.Status != 200 {
+		t.Fatalf("session after 2fa: %d", r.Status)
+	}
+	if r := newClient(t, e).do("POST", "/api/auth/login/2fa", map[string]string{"mfa_token": mfaToken, "code": codes[0].(string)}); r.errCode() != "mfa_expired" {
+		t.Fatalf("challenge must be single-use: %s", r.Raw)
+	}
+
+	// A challenge dies after too many wrong codes, even if the next is right.
+	x := newClient(t, e)
+	tok := x.do("POST", "/api/auth/login", map[string]string{"email": email, "password": pw}).data()["mfa_token"].(string)
+	for range 5 {
+		x.do("POST", "/api/auth/login/2fa", map[string]string{"mfa_token": tok, "code": "999999"})
+	}
+	if r := x.do("POST", "/api/auth/login/2fa", map[string]string{"mfa_token": tok, "code": codes[0].(string)}); r.errCode() != "mfa_expired" {
+		t.Fatalf("challenge must lock after 5 attempts: %s", r.Raw)
+	}
+
+	// The CLI token exchange needs the second factor too.
+	anon := newClient(t, e)
+	if r := anon.do("POST", "/api/auth/token", map[string]string{"email": email, "password": pw}); r.Status != 401 || r.errCode() != "mfa_required" {
+		t.Fatalf("token without code: %d %s", r.Status, r.Raw)
+	}
+	r = anon.do("POST", "/api/auth/token", map[string]string{"email": email, "password": pw, "code": strings.ToUpper(codes[0].(string))})
+	if r.Status != 201 {
+		t.Fatalf("token with recovery code: %d %s", r.Status, r.Raw)
+	}
+	cli := newClient(t, e)
+	cli.token = r.data()["token"].(string)
+	if r := anon.do("POST", "/api/auth/token", map[string]string{"email": email, "password": pw, "code": codes[0].(string)}); r.Status != 422 {
+		t.Fatalf("recovery codes must be single-use: %d %s", r.Status, r.Raw)
+	}
+	// A leaked API token can't remove the second factor.
+	if r := cli.do("POST", "/api/auth/2fa/disable", map[string]string{"password": pw, "code": codes[1].(string)}); r.Status != 403 {
+		t.Fatalf("api token disabling 2FA: %d %s", r.Status, r.Raw)
+	}
+
+	if r := b.do("POST", "/api/auth/2fa/recovery-codes", map[string]string{"password": pw, "code": codes[1].(string)}); r.Status != 200 {
+		t.Fatalf("regenerate: %d %s", r.Status, r.Raw)
+	} else {
+		codes = r.data()["recovery_codes"].([]any)
+	}
+	if r := b.do("POST", "/api/auth/2fa/disable", map[string]string{"password": "wrong-password-123", "code": codes[0].(string)}); r.Status != 422 {
+		t.Fatalf("disable needs the password: %d %s", r.Status, r.Raw)
+	}
+	if r := b.do("POST", "/api/auth/2fa/disable", map[string]string{"password": pw, "code": codes[0].(string)}); r.Status != 204 {
+		t.Fatalf("disable: %d %s", r.Status, r.Raw)
+	}
+	if r := newClient(t, e).do("POST", "/api/auth/login", map[string]string{"email": email, "password": pw}); r.Status != 200 || r.data()["mfa_required"] != nil {
+		t.Fatalf("login after disabling 2FA: %d %s", r.Status, r.Raw)
+	}
+	var left int
+	_ = e.app.Pool.QueryRow(context.Background(), `SELECT count(*) FROM user_recovery_codes c JOIN users u ON u.id = c.user_id WHERE u.email = $1`, email).Scan(&left)
+	if left != 0 {
+		t.Fatalf("recovery codes must be deleted with 2FA, %d left", left)
 	}
 }
 
