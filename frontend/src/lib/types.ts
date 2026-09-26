@@ -354,7 +354,7 @@ export interface QueuedJob {
   status: JobStatus
 }
 
-export type RestoreStatus = "queued" | "running" | "verifying" | "completed" | "failed" | "cancelled"
+export type RestoreStatus = "queued" | "running" | "masking" | "verifying" | "completed" | "failed" | "cancelled"
 
 export interface RestoreJob {
   id: string
@@ -376,6 +376,71 @@ export interface RestoreJob {
   requested_by: string | null
   requested_by_email: string | null
   created_at: string
+  /** Set for anonymized restores. */
+  masking_profile?: string | null
+  masking_profile_version?: number | null
+  masking_report?: MaskingReport | null
+}
+
+export interface MaskingReport {
+  profile_version: number
+  tables: { table: string; action: "masked" | "truncated"; rows: number; columns?: string[] }[]
+  rows_changed: number
+  checks_passed: number
+  duration_ms: number
+}
+
+export type MaskingRule = "email" | "name" | "first_name" | "last_name" | "phone" | "hash" | "date_shift" | "redact" | "null" | "keep"
+
+/** A column's rule: a rule name, or { redact: "value" }. */
+export type ColumnRuleValue = MaskingRule | { redact: string }
+
+/** Masking rules in the compact form the API and the CLI's YAML use. */
+export interface MaskingRules {
+  tables: Record<string, "truncate" | Record<string, ColumnRuleValue>>
+}
+
+export interface MaskingProfile {
+  id: string
+  database_id: string
+  name: string
+  rules: MaskingRules
+  version: number
+  updated_by_email: string | null
+  updated_at: string
+}
+
+export interface CatalogColumn {
+  name: string
+  type: string
+  nullable: boolean
+  key?: boolean
+  unique?: boolean
+  max_length?: number
+  personal: boolean
+  suggested?: MaskingRule
+}
+
+export interface CatalogTable {
+  schema?: string
+  name: string
+  /** How the table is named in rules ("users", or "billing.payments"). */
+  key: string
+  columns: CatalogColumn[]
+  references?: string[]
+  suggest_truncate: boolean
+}
+
+/** GET /databases/{id}/masking: everything the profile editor needs (never data). */
+export interface MaskingEditor {
+  supported: boolean
+  unsupported_reason: string
+  profiles: MaskingProfile[]
+  schema: { tables: CatalogTable[] } | null
+  schema_source: { backup_id: string; backup_created_at: string; recorded_at: string } | null
+  suggested: MaskingRules | null
+  problems: Record<string, string[]>
+  examples: Record<MaskingRule, string>
 }
 
 export interface RestoreInput {
@@ -384,6 +449,8 @@ export interface RestoreInput {
   mode: "existing" | "new"
   new_database_name?: string
   confirmation?: string
+  /** Anonymize with this masking profile of the backup's database. */
+  masking_profile?: string
 }
 
 export type NotificationEvent =

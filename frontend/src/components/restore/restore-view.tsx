@@ -21,7 +21,7 @@ import { useDatabases, useRestores, type RestoreFilters } from "@/lib/queries"
 import { RestoreDetailDialog } from "./restore-detail"
 import { RestoreWizardDialog } from "./restore-wizard"
 
-const RESTORE_STATUSES = ["queued", "running", "verifying", "completed", "failed", "cancelled"]
+const RESTORE_STATUSES = ["queued", "running", "masking", "verifying", "completed", "failed", "cancelled"]
 
 export function RestoreView() {
   const { can } = useOrg()

@@ -1,6 +1,7 @@
 "use client"
 
-import { AlertTriangle, ArrowDown, Check, DatabaseZap, RotateCcw } from "lucide-react"
+import { AlertTriangle, ArrowDown, Check, DatabaseZap, EyeOff, RotateCcw } from "lucide-react"
+import Link from "next/link"
 import { useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -15,10 +16,12 @@ import { Label } from "@/components/ui/label"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import { Switch } from "@/components/ui/switch"
 import { ApiError, errorMessage } from "@/lib/api"
 import { databaseLocation, engineMeta } from "@/lib/engines"
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format"
-import { useBackup, useBackups, useCreateRestore, useDatabases } from "@/lib/queries"
+import { unruledPersonal } from "@/lib/masking"
+import { useBackup, useBackups, useCreateRestore, useDatabases, useMaskingEditor } from "@/lib/queries"
 import { isSQLitePath } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
 
@@ -91,6 +94,8 @@ export function RestoreWizard({
   const [mode, setMode] = useState<"new" | "existing">("new")
   const [nameInput, setNameInput] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
+  // null = the default: mask when restoring into a different database.
+  const [maskChoice, setMaskChoice] = useState<boolean | null>(null)
   const create = useCreateRestore()
 
   // Preselect from ?backup= (state adjusted during render, once).
@@ -125,6 +130,16 @@ export function RestoreWizard({
   const showNameError = mode === "new" && newName !== "" && !nameValid
   // Typing the target's own name means the user wants to overwrite it.
   const nameIsTarget = mode === "new" && !!target && newName.trim().toLowerCase() === target.database.toLowerCase()
+  // Anonymized restores use the source database's "default" masking profile.
+  const sourceDbId = backup?.database_id ?? sourceId
+  const masking = useMaskingEditor(sourceDbId || undefined)
+  const maskProfile = masking.data?.supported ? masking.data.profiles.find((p) => p.name === "default") : undefined
+  const maskProblems = maskProfile && masking.data?.schema ? unruledPersonal(maskProfile.rules, masking.data.schema.tables).length + (masking.data.problems.default ?? []).length : 0
+  // Never overwrite the source with fake data; don't mask a same-server
+  // recovery by default (it can still be switched on).
+  const overSource = mode === "existing" && targetId === sourceDbId
+  const masked = !!maskProfile && !overSource && (maskChoice ?? targetId !== sourceDbId)
+
   // The target must be a live database (a backup's source may have been removed).
   const ready = !!backupId && !!target && nameValid && !nameIsTarget
 
@@ -137,10 +152,19 @@ export function RestoreWizard({
 
   const submit = () =>
     create.mutate(
-      { backup_id: backupId, target_database_id: targetId, mode, new_database_name: mode === "new" ? newName : undefined, confirmation: mode === "existing" ? "RESTORE" : undefined },
+      {
+        backup_id: backupId,
+        target_database_id: targetId,
+        mode,
+        new_database_name: mode === "new" ? newName : undefined,
+        confirmation: mode === "existing" ? "RESTORE" : undefined,
+        masking_profile: masked ? "default" : undefined,
+      },
       {
         onSuccess: (r) => {
-          toast.success("Restore queued", { description: `Restoring into ${mode === "new" ? newName : target?.name}` })
+          toast.success(masked ? "Masked restore queued" : "Restore queued", {
+            description: `${masked ? "Anonymizing, then restoring" : "Restoring"} into ${mode === "new" ? newName : target?.name}`,
+          })
           setConfirming(false)
           onCreated(r.id)
         },
@@ -311,6 +335,37 @@ export function RestoreWizard({
               </AlertDescription>
             </Alert>
           )}
+          {maskProfile ? (
+            <div className={cn("flex items-start gap-3 rounded-lg border p-3", masked && "border-brand/50 bg-brand/5")}>
+              <Switch id="mask" checked={masked} disabled={overSource} onCheckedChange={(v) => setMaskChoice(v)} className="mt-0.5" />
+              <div className="min-w-0 space-y-0.5 text-sm">
+                <Label htmlFor="mask" className="flex items-center gap-1.5 font-medium">
+                  <EyeOff className="size-4" /> Mask personal data
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {overSource
+                    ? "Not available when overwriting the database the backup came from."
+                    : `Restores into a sandbox first, replaces personal data using the masking profile (v${maskProfile.version}), and only then copies the result here.`}
+                </p>
+                {masked && maskProblems > 0 && (
+                  <p className="text-xs text-warning">
+                    The masking profile needs attention, so this restore would stop.{" "}
+                    <Link href={`/databases/${sourceDbId}/masking`} className="underline underline-offset-4">
+                      Fix the rules
+                    </Link>
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : masking.data?.supported && sourceDbId && targetId && targetId !== sourceDbId ? (
+            <p className="text-xs text-muted-foreground">
+              Restoring into staging or development?{" "}
+              <Link href={`/databases/${sourceDbId}/masking`} className="font-medium text-foreground underline-offset-4 hover:underline">
+                Set up data masking
+              </Link>{" "}
+              to copy this database with personal data replaced.
+            </p>
+          ) : null}
         </Step>
 
       </div>
@@ -366,6 +421,7 @@ export function RestoreWizard({
           </div>
           <ul className="space-y-1.5 text-sm text-muted-foreground">
             <SummaryStep>Checksum verified before anything is restored</SummaryStep>
+            {masked && <SummaryStep>Personal data masked in a sandbox first; only the masked copy reaches the target</SummaryStep>}
             {engine.fileBased ? (
               <SummaryStep>Written to a temporary file, integrity-checked, then swapped in: all-or-nothing</SummaryStep>
             ) : engine.atomicRestore ? (

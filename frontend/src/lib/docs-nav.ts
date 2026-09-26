@@ -13,6 +13,7 @@ export const DOCS: DocMeta[] = [
   { slug: "engines", group: "Using DBVault", title: "Database engines", description: "PostgreSQL, MySQL, MariaDB and SQLite: versions, permissions and restore behavior." },
   { slug: "storage", group: "Using DBVault", title: "Storage", description: "Amazon S3, Cloudflare R2, MinIO and local disk, with IAM policies." },
   { slug: "restore", group: "Using DBVault", title: "Restore & verification", description: "Restore into a new or existing database, and prove backups restore." },
+  { slug: "masking", group: "Using DBVault", title: "Data masking", description: "Anonymized restores: copy production into staging with personal data replaced." },
   { slug: "cli", group: "Using DBVault", title: "CLI", description: "Back up, restore and check from a terminal, a script or CI." },
   { slug: "security", group: "How it works", title: "Security", description: "Encryption, key management, two-factor sign-in, and the operator checklist." },
   { slug: "backup-engine", group: "How it works", title: "Backup engine", description: "How a dump streams through compression, encryption and checksums to storage." },

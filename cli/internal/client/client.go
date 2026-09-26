@@ -113,6 +113,10 @@ func (c *Client) Post(ctx context.Context, path string, body, out any) error {
 	return c.Do(ctx, http.MethodPost, path, body, out)
 }
 
+func (c *Client) Put(ctx context.Context, path string, body, out any) error {
+	return c.Do(ctx, http.MethodPut, path, body, out)
+}
+
 func (c *Client) Delete(ctx context.Context, path string) error {
 	return c.Do(ctx, http.MethodDelete, path, nil, nil)
 }
@@ -275,6 +279,11 @@ type Restore struct {
 	Mode               string  `json:"mode"`
 	NewDatabaseName    *string `json:"new_database_name"`
 	DurationMS         *int64  `json:"duration_ms"`
+	MaskingProfile     *string `json:"masking_profile"`
+	MaskingReport      *struct {
+		RowsChanged int64 `json:"rows_changed"`
+		Checks      int   `json:"checks_passed"`
+	} `json:"masking_report"`
 }
 
 type SystemStatus struct {

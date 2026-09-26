@@ -24,6 +24,9 @@ import type {
   BackupDetail,
   BuiltinStorage,
   EngineInfo,
+  MaskingEditor,
+  MaskingProfile,
+  MaskingRules,
   ConnectionTest,
   Dashboard,
   Database,
@@ -72,6 +75,7 @@ export const keys = {
   dashboard: ["dashboard"] as const,
   databases: ["databases"] as const,
   databaseEngines: ["database-engines"] as const,
+  masking: (databaseId: string) => ["databases", databaseId, "masking"] as const,
   database: (id: string) => ["databases", id] as const,
   storage: ["storage"] as const,
   builtinStorage: ["storage", "builtin"] as const,
@@ -97,7 +101,7 @@ export const keys = {
 }
 
 const ACTIVE_JOB = new Set(["queued", "running"])
-const ACTIVE_RESTORE = new Set(["queued", "running", "verifying"])
+const ACTIVE_RESTORE = new Set(["queued", "running", "masking", "verifying"])
 
 function invalidateBackupViews(qc: QueryClient) {
   void qc.invalidateQueries({ queryKey: ["backups"] })
@@ -158,6 +162,32 @@ export function useDashboard() {
 /** Engines this instance supports, and whether each is configured (SQLite needs SQLITE_ROOT). */
 export function useDatabaseEngines() {
   return useQuery({ queryKey: keys.databaseEngines, queryFn: () => api.get<EngineInfo[]>("/database-engines"), staleTime: 5 * 60_000 })
+}
+
+/** Schema, suggestions and saved masking profiles for one database. */
+export function useMaskingEditor(databaseId: string | undefined) {
+  return useQuery({
+    queryKey: keys.masking(databaseId ?? ""),
+    queryFn: () => api.get<MaskingEditor>(`/databases/${databaseId}/masking`),
+    enabled: !!databaseId,
+  })
+}
+
+export function useSaveMaskingProfile(databaseId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ name, rules }: { name: string; rules: MaskingRules }) =>
+      api.put<{ profile: MaskingProfile; problems: string[] }>(`/databases/${databaseId}/masking/profiles/${encodeURIComponent(name)}`, { rules }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.masking(databaseId) }),
+  })
+}
+
+export function useDeleteMaskingProfile(databaseId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) => api.delete(`/databases/${databaseId}/masking/profiles/${encodeURIComponent(name)}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.masking(databaseId) }),
+  })
 }
 
 export function useDatabases() {

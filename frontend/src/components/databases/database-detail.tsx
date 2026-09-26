@@ -1,6 +1,6 @@
 "use client"
 
-import { Activity, ArrowLeft, CalendarClock, CheckCircle2, Pencil, PlugZap, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react"
+import { Activity, ArrowLeft, CalendarClock, CheckCircle2, EyeOff, Pencil, PlugZap, Plus, ShieldCheck, Trash2, XCircle } from "lucide-react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useState } from "react"
@@ -24,7 +24,8 @@ import { Spinner } from "@/components/ui/spinner"
 import { databaseLocation, engineMeta } from "@/lib/engines"
 import { formatBytes, formatPercent } from "@/lib/format"
 import { useOrg } from "@/lib/org"
-import { useBackups, useDatabase, useSchedules, useUpdateDatabase } from "@/lib/queries"
+import { unruledPersonal } from "@/lib/masking"
+import { useBackups, useDatabase, useMaskingEditor, useSchedules, useUpdateDatabase } from "@/lib/queries"
 import type { Database } from "@/lib/types"
 
 import { DeleteDatabaseDialog, useTestDatabaseToast } from "./database-actions"
@@ -252,58 +253,61 @@ export function DatabaseDetail({ id }: { id: string }) {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-        <Card className="h-fit">
-          <CardHeader>
-            <CardTitle className="text-sm">Connection</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <dl className="divide-y">
-              {engineMeta(db.engine).fileBased ? (
-                <>
-                  <Row label="File">
-                    <span className="font-mono text-xs break-all">{db.database}</span>
-                  </Row>
-                  <Row label="Location">
-                    <span className="text-muted-foreground">SQLite folder (SQLITE_ROOT)</span>
-                  </Row>
-                </>
-              ) : (
-                <>
-                  <Row label="Host">
-                    <span className="font-mono text-xs">{db.host}</span>
-                  </Row>
-                  <Row label="Port">
-                    <span className="font-mono text-xs">{db.port}</span>
-                  </Row>
-                  <Row label="Database">
-                    <span className="font-mono text-xs">{db.database}</span>
-                  </Row>
-                  <Row label="Username">
-                    <span className="font-mono text-xs">{db.username}</span>
-                  </Row>
-                  <Row label="Password">
-                    <span className="text-muted-foreground">•••••••• (encrypted)</span>
-                  </Row>
-                  <Row label="SSL mode">
-                    <span className="font-mono text-xs">{db.ssl_mode}</span>
-                  </Row>
-                  <Row label="CA certificate">{db.has_ssl_root_cert ? "Provided" : "None"}</Row>
-                </>
-              )}
-              <Row label="Last tested">
-                {db.last_tested_at ? (
-                  <span className="inline-flex items-center gap-2">
-                    <StatusBadge status={db.last_test_ok ? "ok" : "failed"} label={db.last_test_ok ? "OK" : "Failed"} />
-                    <RelativeTime date={db.last_tested_at} className="text-muted-foreground" />
-                  </span>
+        <div className="space-y-6">
+          <Card className="h-fit">
+            <CardHeader>
+              <CardTitle className="text-sm">Connection</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <dl className="divide-y">
+                {engineMeta(db.engine).fileBased ? (
+                  <>
+                    <Row label="File">
+                      <span className="font-mono text-xs break-all">{db.database}</span>
+                    </Row>
+                    <Row label="Location">
+                      <span className="text-muted-foreground">SQLite folder (SQLITE_ROOT)</span>
+                    </Row>
+                  </>
                 ) : (
-                  "Never"
+                  <>
+                    <Row label="Host">
+                      <span className="font-mono text-xs">{db.host}</span>
+                    </Row>
+                    <Row label="Port">
+                      <span className="font-mono text-xs">{db.port}</span>
+                    </Row>
+                    <Row label="Database">
+                      <span className="font-mono text-xs">{db.database}</span>
+                    </Row>
+                    <Row label="Username">
+                      <span className="font-mono text-xs">{db.username}</span>
+                    </Row>
+                    <Row label="Password">
+                      <span className="text-muted-foreground">•••••••• (encrypted)</span>
+                    </Row>
+                    <Row label="SSL mode">
+                      <span className="font-mono text-xs">{db.ssl_mode}</span>
+                    </Row>
+                    <Row label="CA certificate">{db.has_ssl_root_cert ? "Provided" : "None"}</Row>
+                  </>
                 )}
-              </Row>
-            </dl>
-            {db.last_test_ok === false && db.last_test_error && <p className="mt-2 text-xs text-destructive">{db.last_test_error}</p>}
-          </CardContent>
-        </Card>
+                <Row label="Last tested">
+                  {db.last_tested_at ? (
+                    <span className="inline-flex items-center gap-2">
+                      <StatusBadge status={db.last_test_ok ? "ok" : "failed"} label={db.last_test_ok ? "OK" : "Failed"} />
+                      <RelativeTime date={db.last_tested_at} className="text-muted-foreground" />
+                    </span>
+                  ) : (
+                    "Never"
+                  )}
+                </Row>
+              </dl>
+              {db.last_test_ok === false && db.last_test_error && <p className="mt-2 text-xs text-destructive">{db.last_test_error}</p>}
+            </CardContent>
+          </Card>
+          <MaskingCard databaseId={db.id} />
+        </div>
         <SchedulesCard databaseId={db.id} />
       </div>
 
@@ -316,5 +320,38 @@ export function DatabaseDetail({ id }: { id: string }) {
         </>
       )}
     </div>
+  )
+}
+
+/** Masking status for the database, linking to the profile editor. */
+function MaskingCard({ databaseId }: { databaseId: string }) {
+  const { data } = useMaskingEditor(databaseId)
+  if (!data?.supported) return null
+  const profile = data.profiles.find((p) => p.name === "default")
+  const undecided = profile && data.schema ? unruledPersonal(profile.rules, data.schema.tables).length : 0
+  const problems = profile ? (data.problems.default ?? []).length : 0
+  const columns = profile ? Object.values(profile.rules.tables).reduce((n, t) => n + (t === "truncate" ? 0 : Object.keys(t).length), 0) : 0
+  return (
+    <Card className="h-fit">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <EyeOff className="size-4 text-muted-foreground" /> Data masking
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {profile ? (
+          <p className="text-muted-foreground">
+            Profile <span className="font-mono text-foreground">default</span> v{profile.version}: {columns} columns masked,{" "}
+            {Object.values(profile.rules.tables).filter((t) => t === "truncate").length} tables emptied.
+            {problems + undecided > 0 && <span className="block text-warning">Needs attention: a masked restore would stop.</span>}
+          </p>
+        ) : (
+          <p className="text-muted-foreground">Restore anonymized copies into staging: personal data is replaced with realistic fakes before it leaves a sandbox.</p>
+        )}
+        <Button asChild variant="outline" size="sm">
+          <Link href={`/databases/${databaseId}/masking`}>{profile ? "Edit masking rules" : "Set up masking"}</Link>
+        </Button>
+      </CardContent>
+    </Card>
   )
 }
