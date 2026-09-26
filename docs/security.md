@@ -151,6 +151,16 @@ databases, storage destinations, schedules, recent backups and audit log, plus a
 - CA certificates for `verify-ca`/`verify-full` are written to private temp files and
   removed afterwards.
 
+## SQLite files
+
+SQLite databases are read from and restored into the folder named by `SQLITE_ROOT` (mounted
+from `SQLITE_HOST_DIR` in Compose). Paths are relative to it; absolute paths, `..`
+segments and symlinks that resolve outside it are rejected on every access, so a database
+entry can't reach other files on the host. The folder is shared by every organization on
+the instance: any organization admin can add, back up and restore any file in it. Leave
+`SQLITE_ROOT` unset (or the folder empty) on multi-tenant instances unless every tenant
+should have that access.
+
 ## Network egress (SSRF)
 
 Self-hosted DBVault needs to reach private networks (that's where databases live), so
