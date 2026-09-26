@@ -1,7 +1,7 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { CheckCircle2, ClipboardPaste, Database, Lock, PlugZap, XCircle } from "lucide-react"
+import { CheckCircle2, ClipboardPaste, Database, FileText, FolderOpen, Lock, PlugZap, XCircle } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Controller, useForm, useWatch } from "react-hook-form"
 
@@ -17,7 +17,7 @@ import { ApiError, errorMessage } from "@/lib/api"
 import { ENGINE_LIST, ENGINES, engineMeta, type SupportedEngine } from "@/lib/engines"
 import { formatBytes, formatNumber } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import { useTestConnection } from "@/lib/queries"
+import { useDatabaseEngines, useTestConnection } from "@/lib/queries"
 import { databaseSchema, parseConnectionString, type DatabaseValues } from "@/lib/schemas"
 import type { ConnectionTest, DatabaseInput, SSLMode } from "@/lib/types"
 
@@ -36,6 +36,9 @@ function sslHelp(engine: SupportedEngine, mode: SSLMode): string {
 }
 
 export function toInput(v: DatabaseValues): DatabaseInput {
+  if (ENGINES[v.engine].fileBased) {
+    return { engine: v.engine, name: v.name, host: "", port: 0, database: v.database, username: "", ssl_mode: "disable" }
+  }
   return {
     engine: v.engine,
     name: v.name,
@@ -74,7 +77,7 @@ export function ConnectionResult({ result, engine = "postgres" }: { result: Conn
             <span>{formatBytes(s.size_bytes)}</span>
             <span>{formatNumber(s.table_count)} tables</span>
             <span>{s.latency_ms} ms</span>
-            <span>as {s.current_user}</span>
+            {s.current_user && <span>as {s.current_user}</span>}
           </div>
           {s.is_superuser && meta.id === "postgres" && (
             <p className="mt-1 text-xs">This user is a superuser. A read-only role with pg_read_all_data is enough for backups.</p>
@@ -133,6 +136,8 @@ export function DatabaseForm({
   const host = useWatch({ control: form.control, name: "host" })
   const engine = useWatch({ control: form.control, name: "engine" })
   const meta = ENGINES[engine] ?? ENGINES.postgres
+  const engines = useDatabaseEngines()
+  const unavailable = engines.data?.find((e) => e.name === engine && !e.available)?.unavailable_reason
 
   useEffect(() => {
     onEngineChange?.(engine)
@@ -145,8 +150,11 @@ export function DatabaseForm({
     if (prev.id === to.id) return
     form.setValue("engine", next, { shouldDirty: true })
     if (Number(form.getValues("port")) === prev.defaultPort || !form.getValues("port")) form.setValue("port", to.defaultPort)
-    if (form.getValues("database") === prev.defaultDatabase) form.setValue("database", to.defaultDatabase)
-    if (!(to.sslModes as readonly string[]).includes(form.getValues("ssl_mode"))) form.setValue("ssl_mode", "prefer")
+    // A file path and a database name are different things: don't carry one over.
+    if (form.getValues("database") === prev.defaultDatabase || prev.fileBased !== to.fileBased) form.setValue("database", to.defaultDatabase)
+    if (to.fileBased) form.setValue("ssl_mode", "disable")
+    else if (prev.fileBased || !(to.sslModes as readonly string[]).includes(form.getValues("ssl_mode"))) form.setValue("ssl_mode", "prefer")
+    form.clearErrors()
     setResult(null)
   }
 
@@ -186,7 +194,7 @@ export function DatabaseForm({
 
   return (
     <form onSubmit={submit} noValidate className="space-y-6">
-      {mode === "create" && (
+      {mode === "create" && !meta.fileBased && (
         <FormField id="conn-string" label="Paste a connection string (optional)" description="Fills the fields below. It's parsed in your browser and never sent as-is.">
           <div className="relative">
             <ClipboardPaste className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground" />
@@ -204,7 +212,7 @@ export function DatabaseForm({
       <FieldGroup>
         {mode === "create" ? (
           <FormField id="engine" label="Database type" error={errors.engine}>
-            <div id="engine" role="radiogroup" aria-label="Database type" className="grid gap-2 sm:grid-cols-3">
+            <div id="engine" role="radiogroup" aria-label="Database type" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
               {ENGINE_LIST.map((e) => {
                 const selected = e.id === engine
                 return (
@@ -223,7 +231,7 @@ export function DatabaseForm({
                       <Database className={cn("size-4", selected ? "text-brand" : "text-muted-foreground")} aria-hidden />
                       <span className="font-medium">{e.label}</span>
                     </span>
-                    <span className="font-mono text-[11px] text-muted-foreground">{e.defaultPort}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground">{e.fileBased ? "file" : e.defaultPort}</span>
                   </button>
                 )
               })}
@@ -237,69 +245,92 @@ export function DatabaseForm({
         <FormField id="name" label="Name" description="How this database appears in DBVault, e.g. production." error={errors.name}>
           <Input id="name" placeholder="production" {...form.register("name")} />
         </FormField>
-        <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
+        {unavailable && (
+          <Alert className="border-warning/40 bg-warning/5">
+            <FolderOpen className="text-warning" />
+            <AlertTitle>{meta.label} isn&apos;t set up on this server yet</AlertTitle>
+            <AlertDescription>{unavailable}</AlertDescription>
+          </Alert>
+        )}
+        {meta.fileBased ? (
           <FormField
-            id="host"
-            label="Host"
-            error={errors.host}
-            description={
-              /^(localhost|127\.0\.0\.1|::1)$/i.test(host?.trim() ?? "")
-                ? "DBVault runs in Docker, where localhost is the DBVault container. For a database on this machine use host.docker.internal."
-                : undefined
-            }
+            id="database"
+            label="Database file"
+            description="Path inside the SQLite folder mounted into DBVault (SQLITE_ROOT), e.g. myapp/app.db."
+            error={errors.database}
           >
-            <Input id="host" className="font-mono" placeholder="db.example.com" autoComplete="off" {...form.register("host")} />
+            <div className="relative">
+              <FileText className="pointer-events-none absolute top-2 left-2.5 size-4 text-muted-foreground" />
+              <Input id="database" className="pl-8 font-mono" placeholder="myapp/app.db" autoComplete="off" {...form.register("database")} />
+            </div>
           </FormField>
-          <FormField id="port" label="Port" error={errors.port}>
-            <Input id="port" type="number" inputMode="numeric" className="font-mono" {...form.register("port")} />
-          </FormField>
-        </div>
-        <FormField id="database" label="Database" error={errors.database}>
-          <Input id="database" className="font-mono" autoComplete="off" {...form.register("database")} />
-        </FormField>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <FormField id="username" label="Username" error={errors.username}>
-            <Input id="username" className="font-mono" autoComplete="off" {...form.register("username")} />
-          </FormField>
-          <FormField id="password" label="Password" error={errors.password}>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="new-password"
-              placeholder={mode === "edit" ? "Leave blank to keep the current password" : ""}
-              {...form.register("password")}
-            />
-          </FormField>
-        </div>
-        <FormField id="ssl_mode" label="SSL mode" description={sslHelp(engine, sslMode)} error={errors.ssl_mode}>
-          <Controller
-            control={form.control}
-            name="ssl_mode"
-            render={({ field }) => (
-              <Select value={field.value} onValueChange={field.onChange}>
-                <SelectTrigger id="ssl_mode" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {meta.sslModes.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      <span className="font-mono">{m}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+        ) : (
+          <>
+            <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
+              <FormField
+                id="host"
+                label="Host"
+                error={errors.host}
+                description={
+                  /^(localhost|127\.0\.0\.1|::1)$/i.test(host?.trim() ?? "")
+                    ? "DBVault runs in Docker, where localhost is the DBVault container. For a database on this machine use host.docker.internal."
+                    : undefined
+                }
+              >
+                <Input id="host" className="font-mono" placeholder="db.example.com" autoComplete="off" {...form.register("host")} />
+              </FormField>
+              <FormField id="port" label="Port" error={errors.port}>
+                <Input id="port" type="number" inputMode="numeric" className="font-mono" {...form.register("port")} />
+              </FormField>
+            </div>
+            <FormField id="database" label="Database" error={errors.database}>
+              <Input id="database" className="font-mono" autoComplete="off" {...form.register("database")} />
+            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField id="username" label="Username" error={errors.username}>
+                <Input id="username" className="font-mono" autoComplete="off" {...form.register("username")} />
+              </FormField>
+              <FormField id="password" label="Password" error={errors.password}>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={mode === "edit" ? "Leave blank to keep the current password" : ""}
+                  {...form.register("password")}
+                />
+              </FormField>
+            </div>
+            <FormField id="ssl_mode" label="SSL mode" description={sslHelp(engine, sslMode)} error={errors.ssl_mode}>
+              <Controller
+                control={form.control}
+                name="ssl_mode"
+                render={({ field }) => (
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <SelectTrigger id="ssl_mode" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {meta.sslModes.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          <span className="font-mono">{m}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </FormField>
+            {(sslMode === "verify-ca" || sslMode === "verify-full") && (
+              <FormField
+                id="ssl_root_cert"
+                label="CA certificate (PEM)"
+                description={mode === "edit" ? "Leave blank to keep the stored certificate." : "The root certificate used to verify the server."}
+                error={errors.ssl_root_cert}
+              >
+                <Textarea id="ssl_root_cert" rows={5} className="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" {...form.register("ssl_root_cert")} />
+              </FormField>
             )}
-          />
-        </FormField>
-        {(sslMode === "verify-ca" || sslMode === "verify-full") && (
-          <FormField
-            id="ssl_root_cert"
-            label="CA certificate (PEM)"
-            description={mode === "edit" ? "Leave blank to keep the stored certificate." : "The root certificate used to verify the server."}
-            error={errors.ssl_root_cert}
-          >
-            <Textarea id="ssl_root_cert" rows={5} className="font-mono text-xs" placeholder="-----BEGIN CERTIFICATE-----" {...form.register("ssl_root_cert")} />
-          </FormField>
+          </>
         )}
       </FieldGroup>
 
@@ -312,7 +343,9 @@ export function DatabaseForm({
 
       <p className="flex items-start gap-2 text-xs text-muted-foreground">
         <Lock className="mt-0.5 size-3.5 shrink-0" />
-        Credentials are encrypted with AES-256-GCM before they&apos;re stored and are never shown again.
+        {meta.fileBased
+          ? "DBVault only reads and writes files inside the SQLite folder. Backups are consistent snapshots taken while your app keeps running."
+          : "Credentials are encrypted with AES-256-GCM before they're stored and are never shown again."}
       </p>
 
       <div className="flex flex-wrap items-center justify-end gap-2 border-t pt-4">
