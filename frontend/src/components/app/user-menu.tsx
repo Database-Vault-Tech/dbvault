@@ -89,9 +89,9 @@ export function UserMenu() {
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuItem asChild>
-          <a href="https://github.com/Database-Vault-Tech/dbvault#readme" target="_blank" rel="noreferrer">
+          <Link href="/docs">
             <BookOpen /> Documentation
-          </a>
+          </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={signOut}>
