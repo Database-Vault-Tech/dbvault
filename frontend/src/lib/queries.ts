@@ -23,6 +23,7 @@ import type {
   Backup,
   BackupDetail,
   BuiltinStorage,
+  EngineInfo,
   ConnectionTest,
   Dashboard,
   Database,
@@ -70,6 +71,7 @@ export const keys = {
   system: ["system"] as const,
   dashboard: ["dashboard"] as const,
   databases: ["databases"] as const,
+  databaseEngines: ["database-engines"] as const,
   database: (id: string) => ["databases", id] as const,
   storage: ["storage"] as const,
   builtinStorage: ["storage", "builtin"] as const,
@@ -152,6 +154,11 @@ export function useDashboard() {
 }
 
 // -------------------------------------------------------------- databases
+
+/** Engines this instance supports, and whether each is configured (SQLite needs SQLITE_ROOT). */
+export function useDatabaseEngines() {
+  return useQuery({ queryKey: keys.databaseEngines, queryFn: () => api.get<EngineInfo[]>("/database-engines"), staleTime: 5 * 60_000 })
+}
 
 export function useDatabases() {
   return useQuery({ queryKey: keys.databases, queryFn: () => api.get<Database[]>("/databases") })

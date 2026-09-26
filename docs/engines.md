@@ -1,21 +1,23 @@
 # Database engines
 
-DBVault backs up and restores **PostgreSQL**, **MySQL** and **MariaDB**. Each engine is a
+DBVault backs up and restores **PostgreSQL**, **MySQL**, **MariaDB** and **SQLite**. Each engine is a
 driver (`backend/internal/engine/<engine>`) that implements one small interface: connect and
 inspect, stream a native dump, list the tables in a dump, restore, create/drop databases and
 check restored tables. Everything else (compression, encryption, checksums, storage,
 retention, schedules, notifications, verification reports) is shared and engine-agnostic.
 
-| | PostgreSQL | MySQL | MariaDB |
-|---|---|---|---|
-| Server versions | 9.2 – 18 | 5.7 – 9.x (tested: 5.7, 8.0, 8.4, 9) | 10.x – 11.x (tested: 10.6, 11.4, 11.8) |
-| Dump tool | `pg_dump --format=custom` | `mariadb-dump` | `mariadb-dump` |
-| Restore tool | `pg_restore` | `mariadb` | `mariadb` |
-| Artifact | `…dump.zst.age` | `…sql.zst.age` | `…sql.zst.age` |
-| Consistency | snapshot (`pg_dump`) | `--single-transaction` (InnoDB) | `--single-transaction` (InnoDB) |
-| Atomic restore | yes, one transaction | **no** (DDL commits implicitly) | **no** |
-| Sandbox image (Docker mode) | `postgres:<major>-alpine` | `mysql:<major>` (`mysql:8` for 8.x) | `mariadb:<major>` |
-| Verification server (server mode) | `VERIFY_POSTGRES_URL` | `VERIFY_MYSQL_URL` | `VERIFY_MARIADB_URL` |
+| | PostgreSQL | MySQL | MariaDB | SQLite |
+|---|---|---|---|---|
+| Server versions | 9.2 – 18 | 5.7 – 9.x (tested: 5.7, 8.0, 8.4, 9) | 10.x – 11.x (tested: 10.6, 11.4, 11.8) | SQLite 3 files |
+| Reached via | network | network | network | folder mounted into DBVault (`SQLITE_ROOT`) |
+| Dump tool | `pg_dump --format=custom` | `mariadb-dump` | `mariadb-dump` | `VACUUM INTO` (built in, no binary needed) |
+| Restore tool | `pg_restore` | `mariadb` | `mariadb` | write, integrity-check, rename |
+| Artifact | `…dump.zst.age` | `…sql.zst.age` | `…sql.zst.age` | `…db.zst.age` (a plain SQLite file inside) |
+| Consistency | snapshot (`pg_dump`) | `--single-transaction` (InnoDB) | `--single-transaction` (InnoDB) | snapshot (a read transaction) |
+| Atomic restore | yes, one transaction | **no** (DDL commits implicitly) | **no** | yes, atomic file swap |
+| Restore testing | sandbox container or server | sandbox container or server | sandbox container or server | always available: temporary file on the worker |
+| Sandbox image (Docker mode) | `postgres:<major>-alpine` | `mysql:<major>` (`mysql:8` for 8.x) | `mariadb:<major>` | — |
+| Verification server (server mode) | `VERIFY_POSTGRES_URL` | `VERIFY_MYSQL_URL` | `VERIFY_MARIADB_URL` | — |
 
 The engine is chosen when a database is added and can't be changed afterwards. A backup can
 only be restored into a database of the same engine.
@@ -97,3 +99,71 @@ into it, counts every table's rows, and drops it. The verification server must b
 as new as the backup's server (a MySQL 9 backup needs a MySQL 9 server, or
 `VERIFY_MODE=docker`). In Docker mode a matching `mysql:<major>` or `mariadb:<major>`
 container is started per test instead.
+
+## SQLite
+
+SQLite databases are files, not servers, so DBVault reaches them through a folder mounted
+into its containers rather than over the network. This works when DBVault runs on the
+same machine as the application (or shares a volume with it).
+
+### Setup
+
+1. Put the folder holding your database files in `.env` (the default is `./data/sqlite`
+   next to `docker-compose.yml`):
+
+   ```bash
+   SQLITE_HOST_DIR=/srv/myapp/data
+   ```
+
+   Compose mounts it at `/sqlite` in the `api` and `worker` containers and sets
+   `SQLITE_ROOT=/sqlite`. Outside Docker, set `SQLITE_ROOT` to the folder yourself. With
+   `SQLITE_ROOT` unset, SQLite is disabled and the "Add database" form says how to enable it.
+2. The containers run as **uid 10001**, which needs read and write access to the folder and
+   its files: write access for restores, and because SQLite creates a `-shm` file next to
+   WAL-mode databases even when only reading.
+
+   ```bash
+   sudo chown -R 10001 /srv/myapp/data        # or: a shared group with rw access
+   ```
+3. `docker compose up -d`, then **Add database → SQLite** and enter the file's path inside
+   the folder, e.g. `app.db` or `tenants/acme.db`. The CLI equivalent is
+   `dbvault database add --name blog --file app.db`.
+
+Paths are always relative to the folder. Absolute paths, `..` and symlinks that lead
+outside it are rejected, so DBVault can't be pointed at other files on the host. **Every
+organization on the instance can reach every file in the folder**, so on a shared instance
+mount only what you mean to protect.
+
+### Backups
+
+A backup runs `VACUUM INTO` against the live file through a read-only connection. That is
+SQLite's own online snapshot: it reads inside a single transaction, so the copy is
+consistent (committed changes, including ones still in the WAL, are in; uncommitted ones
+aren't) while the application keeps reading and writing. The copy is also compacted. It
+goes to the worker's private work folder, then streams through compression, encryption,
+SHA-256 and upload like every other engine, and is deleted.
+
+The stored artifact decrypts and decompresses to an ordinary SQLite database:
+
+```bash
+age -d -i recovery.key app-2026-09-26.db.zst.age | zstd -d > app.db
+sqlite3 app.db .tables
+```
+
+### Restores
+
+- DBVault writes the backup to a temporary file next to the target, runs SQLite's
+  `quick_check` on it, and only then renames it over the target, so a restore either
+  fully replaces the file or leaves it untouched.
+- **Stop the application before restoring over its database.** DBVault refuses to replace
+  a file whose `-wal` or `-journal` isn't empty (the database is open or wasn't closed
+  cleanly), because SQLite would apply that stale log to the restored file. Restoring into
+  a **new file** (the default) is always safe; point the application at it when ready.
+- A replaced file keeps the original's permissions (and owner, when the worker is allowed
+  to set it). New files get `0640` and the folder's owner where possible.
+
+### Restore testing
+
+Always available, with no Docker socket or verification server: the backup is restored
+into a temporary folder on the worker, every table's rows are counted, SQLite's full
+`integrity_check` runs, and the folder is deleted.

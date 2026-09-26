@@ -127,7 +127,8 @@ export function BackupDetailView({ id }: { id: string }) {
   const active = b.status === "queued" || b.status === "running"
   const completed = b.status === "completed"
   const verifying = b.verification_status === "running" || (verification_job && (verification_job.status === "queued" || verification_job.status === "running"))
-  const verifyUnavailable = system.data && !system.data.verification.available
+  // SQLite restore tests use a temporary file on the worker, so they never need the sandbox.
+  const verifyUnavailable = system.data && !system.data.verification.available && !engine.fileBased
   const ratio = b.raw_size_bytes && b.size_bytes ? b.raw_size_bytes / b.size_bytes : null
 
   return (

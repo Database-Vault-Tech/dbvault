@@ -21,7 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
-import { engineMeta } from "@/lib/engines"
+import { databaseLocation, engineMeta } from "@/lib/engines"
 import { formatBytes, formatPercent } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useBackups, useDatabase, useSchedules, useUpdateDatabase } from "@/lib/queries"
@@ -195,9 +195,7 @@ export function DatabaseDetail({ id }: { id: string }) {
           }
           description={
             <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-mono text-xs">
-                {db.host}:{db.port}/{db.database}
-              </span>
+              <span className="font-mono text-xs">{databaseLocation(db)}</span>
               <span>
                 {engineMeta(db.engine).label}
                 {db.pg_version && ` ${db.pg_version}`}
@@ -260,25 +258,38 @@ export function DatabaseDetail({ id }: { id: string }) {
           </CardHeader>
           <CardContent>
             <dl className="divide-y">
-              <Row label="Host">
-                <span className="font-mono text-xs">{db.host}</span>
-              </Row>
-              <Row label="Port">
-                <span className="font-mono text-xs">{db.port}</span>
-              </Row>
-              <Row label="Database">
-                <span className="font-mono text-xs">{db.database}</span>
-              </Row>
-              <Row label="Username">
-                <span className="font-mono text-xs">{db.username}</span>
-              </Row>
-              <Row label="Password">
-                <span className="text-muted-foreground">•••••••• (encrypted)</span>
-              </Row>
-              <Row label="SSL mode">
-                <span className="font-mono text-xs">{db.ssl_mode}</span>
-              </Row>
-              <Row label="CA certificate">{db.has_ssl_root_cert ? "Provided" : "None"}</Row>
+              {engineMeta(db.engine).fileBased ? (
+                <>
+                  <Row label="File">
+                    <span className="font-mono text-xs break-all">{db.database}</span>
+                  </Row>
+                  <Row label="Location">
+                    <span className="text-muted-foreground">SQLite folder (SQLITE_ROOT)</span>
+                  </Row>
+                </>
+              ) : (
+                <>
+                  <Row label="Host">
+                    <span className="font-mono text-xs">{db.host}</span>
+                  </Row>
+                  <Row label="Port">
+                    <span className="font-mono text-xs">{db.port}</span>
+                  </Row>
+                  <Row label="Database">
+                    <span className="font-mono text-xs">{db.database}</span>
+                  </Row>
+                  <Row label="Username">
+                    <span className="font-mono text-xs">{db.username}</span>
+                  </Row>
+                  <Row label="Password">
+                    <span className="text-muted-foreground">•••••••• (encrypted)</span>
+                  </Row>
+                  <Row label="SSL mode">
+                    <span className="font-mono text-xs">{db.ssl_mode}</span>
+                  </Row>
+                  <Row label="CA certificate">{db.has_ssl_root_cert ? "Provided" : "None"}</Row>
+                </>
+              )}
               <Row label="Last tested">
                 {db.last_tested_at ? (
                   <span className="inline-flex items-center gap-2">

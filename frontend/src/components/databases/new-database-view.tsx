@@ -16,7 +16,7 @@ import { useCreateDatabase } from "@/lib/queries"
 
 import { DatabaseForm } from "./database-form"
 
-const GRANTS: Record<SupportedEngine, { intro: string; sql: string; note?: string }> = {
+const GRANTS: Record<SupportedEngine, { title?: string; intro: string; sql: string; note?: string }> = {
   postgres: {
     intro: "Backups only need read access. On PostgreSQL 14+ create a dedicated role:",
     sql: `CREATE ROLE dbvault LOGIN
@@ -41,6 +41,12 @@ GRANT SELECT, SHOW VIEW,
   TRIGGER, EVENT, LOCK TABLES
   ON app.* TO 'dbvault'@'%';`,
   },
+  sqlite: {
+    title: "Mount the SQLite folder",
+    intro: "DBVault reads SQLite files from a folder mounted into the api and worker containers. In .env:",
+    sql: `SQLITE_HOST_DIR=/srv/myapp/data`,
+    note: "Then run docker compose up -d. Files appear under that folder, e.g. app.db. The containers run as uid 10001, which needs read and write access.",
+  },
 }
 
 export function NewDatabaseView() {
@@ -57,7 +63,7 @@ export function NewDatabaseView() {
           <ArrowLeft /> Databases
         </Link>
       </Button>
-      <PageHeader title="Add database" description="Connect a PostgreSQL, MySQL or MariaDB database. Test the connection before saving to catch firewall or credential issues early." />
+      <PageHeader title="Add database" description="Connect a PostgreSQL, MySQL, MariaDB or SQLite database. Test the connection before saving to catch firewall, credential or permission issues early." />
       {!can("admin") ? (
         <Alert>
           <AlertTitle>Admins only</AlertTitle>
@@ -85,7 +91,7 @@ export function NewDatabaseView() {
             <Card size="sm">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-sm">
-                  <ShieldCheck className="size-4 text-brand" /> Least privilege
+                  <ShieldCheck className="size-4 text-brand" /> {grants.title ?? "Least privilege"}
                 </CardTitle>
                 <CardDescription>{grants.intro}</CardDescription>
               </CardHeader>

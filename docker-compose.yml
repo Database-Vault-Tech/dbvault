@@ -34,6 +34,8 @@ x-backend-env: &backend-env
   S3_SECRET_KEY: ${S3_SECRET_KEY:-}
   S3_FORCE_PATH_STYLE: "true"
   LOCAL_STORAGE_ROOT: /var/lib/dbvault/backups
+  # SQLite database files live in SQLITE_HOST_DIR on the host, mounted here.
+  SQLITE_ROOT: /sqlite
   # Email (Mailpit catches everything locally: http://localhost:8025).
   SMTP_HOST: ${SMTP_HOST:-mailpit}
   SMTP_PORT: ${SMTP_PORT:-1025}
@@ -170,6 +172,8 @@ services:
     volumes:
       - dbvault-secrets:/var/lib/dbvault/secrets
       - dbvault-backups:/var/lib/dbvault/backups
+      # SQLite files to back up and restore (read/write for uid 10001).
+      - ${SQLITE_HOST_DIR:-./data/sqlite}:/sqlite
     depends_on:
       postgres:
         condition: service_healthy
@@ -205,6 +209,7 @@ services:
       - dbvault-secrets:/var/lib/dbvault/secrets
       - dbvault-backups:/var/lib/dbvault/backups
       - dbvault-work:/var/lib/dbvault/work
+      - ${SQLITE_HOST_DIR:-./data/sqlite}:/sqlite
     depends_on:
       api:
         condition: service_healthy

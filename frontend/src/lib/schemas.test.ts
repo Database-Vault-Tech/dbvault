@@ -61,6 +61,13 @@ describe("databaseSchema", () => {
   it("rejects database names that look like options", () => {
     expect(databaseSchema(true).safeParse({ ...valid, database: "--help" }).success).toBe(false)
   })
+  it("validates SQLite as a file path with no connection fields", () => {
+    const lite = { engine: "sqlite", name: "lite", host: "", port: 0, database: "app/data.db", username: "", password: "", ssl_mode: "disable" }
+    expect(databaseSchema(true).safeParse(lite).success).toBe(true)
+    for (const database of ["", "/etc/passwd", "../x.db", "a/../../b.db", "./a.db", "a//b.db", "-x.db"]) {
+      expect(databaseSchema(true).safeParse({ ...lite, database }).success, database).toBe(false)
+    }
+  })
   it("coerces and bounds the port", () => {
     expect(databaseSchema(true).safeParse({ ...valid, port: "6543" }).success).toBe(true)
     expect(databaseSchema(true).safeParse({ ...valid, port: 70000 }).success).toBe(false)

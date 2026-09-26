@@ -1,7 +1,7 @@
 import type { DatabaseEngine, SSLMode } from "@/lib/types"
 
 /** Engines DBVault can back up and restore end to end. Mirrors the backend drivers. */
-export type SupportedEngine = Extract<DatabaseEngine, "postgres" | "mysql" | "mariadb">
+export type SupportedEngine = Extract<DatabaseEngine, "postgres" | "mysql" | "mariadb" | "sqlite">
 
 export interface EngineMeta {
   id: SupportedEngine
@@ -13,6 +13,8 @@ export interface EngineMeta {
   sslModes: readonly SSLMode[]
   /** A failed restore leaves the target unchanged. */
   atomicRestore: boolean
+  /** A file in the folder mounted into DBVault (SQLITE_ROOT): no host, port or login. */
+  fileBased: boolean
   dumpTool: string
   restoreTool: string
   /** Dump file extension before compression/encryption. */
@@ -31,6 +33,7 @@ export const ENGINES: Record<SupportedEngine, EngineMeta> = {
     defaultDatabase: "postgres",
     sslModes: ["disable", "allow", "prefer", "require", "verify-ca", "verify-full"],
     atomicRestore: true,
+    fileBased: false,
     dumpTool: "pg_dump",
     restoreTool: "pg_restore",
     extension: ".dump",
@@ -46,6 +49,7 @@ export const ENGINES: Record<SupportedEngine, EngineMeta> = {
     defaultDatabase: "",
     sslModes: ["disable", "prefer", "require", "verify-full"],
     atomicRestore: false,
+    fileBased: false,
     dumpTool: "mariadb-dump",
     restoreTool: "mariadb",
     extension: ".sql",
@@ -61,12 +65,29 @@ export const ENGINES: Record<SupportedEngine, EngineMeta> = {
     defaultDatabase: "",
     sslModes: ["disable", "prefer", "require", "verify-full"],
     atomicRestore: false,
+    fileBased: false,
     dumpTool: "mariadb-dump",
     restoreTool: "mariadb",
     extension: ".sql",
     formatLabel: "SQL dump",
     urlSchemes: ["mariadb:"],
     urlExample: "mariadb://user:password@db.example.com:3306/app",
+  },
+  sqlite: {
+    id: "sqlite",
+    label: "SQLite",
+    shortLabel: "SQLite",
+    defaultPort: 0,
+    defaultDatabase: "",
+    sslModes: ["disable"],
+    atomicRestore: true,
+    fileBased: true,
+    dumpTool: "VACUUM INTO",
+    restoreTool: "atomic file swap",
+    extension: ".db",
+    formatLabel: "SQLite file",
+    urlSchemes: [],
+    urlExample: "",
   },
 }
 
@@ -79,4 +100,10 @@ export function engineMeta(id: string | null | undefined): EngineMeta {
 
 export function engineLabel(id: string | null | undefined): string {
   return engineMeta(id).label
+}
+
+/** Where a database lives, for lists and summaries: host:port/db, or the file path for SQLite. */
+export function databaseLocation(d: { engine?: string | null; host: string; port: number; database: string }, withPort = true): string {
+  if (engineMeta(d.engine).fileBased) return d.database
+  return withPort ? `${d.host}:${d.port}/${d.database}` : `${d.host}/${d.database}`
 }

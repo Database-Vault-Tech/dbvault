@@ -15,8 +15,13 @@ const ENGINES = [
     available: true,
   },
   { name: "MariaDB", tool: "mariadb-dump · mariadb", detail: "MariaDB 10 and 11, native dump and restore, restore-tested in a sandbox.", available: true },
+  {
+    name: "SQLite",
+    tool: "VACUUM INTO · atomic swap",
+    detail: "Consistent snapshots of live SQLite files from a mounted folder, restore-tested on every verification.",
+    available: true,
+  },
   { name: "SQL Server", tool: "sqlpackage / BACKUP", detail: "Native backups for Microsoft SQL Server.", available: false },
-  { name: "SQLite", tool: "sqlite3 .backup", detail: "Consistent online backups of SQLite files.", available: false },
 ]
 
 export function SupportedDatabases() {
@@ -27,7 +32,7 @@ export function SupportedDatabases() {
           id="databases-title"
           eyebrow="Supported databases"
           title="One vault for every SQL database."
-          description="DBVault drives each engine's own battle-tested dump tooling through the same pipeline: compression, encryption, checksums, storage, retention and restore tests. PostgreSQL, MySQL and MariaDB are fully supported today; SQL Server and SQLite are on the way."
+          description="DBVault drives each engine's own battle-tested dump tooling through the same pipeline: compression, encryption, checksums, storage, retention and restore tests. PostgreSQL, MySQL, MariaDB and SQLite are fully supported today; SQL Server is on the way."
         />
         <ul className="grid gap-3 sm:grid-cols-2">
           {ENGINES.map((e) => (

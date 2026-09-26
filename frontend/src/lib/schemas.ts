@@ -29,6 +29,18 @@ const hostRegex =
 
 const engineIds = ENGINE_LIST.map((e) => e.id) as [SupportedEngine, ...SupportedEngine[]]
 
+/** A path inside the SQLite folder (mirrors the API's validate.IsRelativeFilePath). */
+export const SQLITE_PATH_RE = /^[A-Za-z0-9._\- +@()]+(\/[A-Za-z0-9._\- +@()]+)*$/
+
+export function isSQLitePath(p: string): boolean {
+  return (
+    p.length > 0 &&
+    p.length <= 255 &&
+    SQLITE_PATH_RE.test(p) &&
+    p.split("/").every((seg) => seg !== "." && seg !== ".." && !seg.startsWith("-") && seg.trim() === seg)
+  )
+}
+
 export function databaseSchema(requirePassword: boolean) {
   return z
     .object({
@@ -39,22 +51,32 @@ export function databaseSchema(requirePassword: boolean) {
         .min(1, "Give this database a name.")
         .max(63)
         .regex(/^[a-zA-Z0-9][a-zA-Z0-9 _.-]*$/, "Use letters, numbers, spaces, dots, dashes or underscores."),
-      host: z.string().trim().min(1, "Enter the host.").regex(hostRegex, "Enter a hostname or IP address (no port or scheme)."),
-      port: z.coerce.number<number>().int().min(1).max(65535),
-      database: z
-        .string()
-        .trim()
-        .min(1, "Enter the database name.")
-        .max(63)
-        .refine((v) => !v.startsWith("-"), "Database names can't start with a dash."),
-      username: z.string().trim().min(1, "Enter the username.").max(63),
-      password: requirePassword ? z.string().min(1, "Enter the password.") : z.string().optional(),
+      host: z.string().trim(),
+      port: z.coerce.number<number>().int(),
+      database: z.string().trim(),
+      username: z.string().trim(),
+      password: z.string().optional(),
       ssl_mode: z.enum(sslModes),
       ssl_root_cert: z.string().optional(),
     })
-    .refine((v) => (ENGINES[v.engine].sslModes as readonly string[]).includes(v.ssl_mode), {
-      path: ["ssl_mode"],
-      message: "This SSL mode isn't available for this database type.",
+    .superRefine((v, ctx) => {
+      const issue = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message })
+      // SQLite: just a file path inside the mounted folder.
+      if (ENGINES[v.engine].fileBased) {
+        if (!v.database) issue("database", "Enter the path of the database file.")
+        else if (!isSQLitePath(v.database)) issue("database", "Use a path inside the SQLite folder, like app/data.db (no leading /, no ..).")
+        return
+      }
+      if (!v.host) issue("host", "Enter the host.")
+      else if (!hostRegex.test(v.host)) issue("host", "Enter a hostname or IP address (no port or scheme).")
+      if (v.port < 1 || v.port > 65535) issue("port", "Enter a port between 1 and 65535.")
+      if (!v.database) issue("database", "Enter the database name.")
+      else if (v.database.length > 63) issue("database", "Use at most 63 characters.")
+      else if (v.database.startsWith("-")) issue("database", "Database names can't start with a dash.")
+      if (!v.username) issue("username", "Enter the username.")
+      else if (v.username.length > 63) issue("username", "Use at most 63 characters.")
+      if (requirePassword && !v.password) issue("password", "Enter the password.")
+      if (!(ENGINES[v.engine].sslModes as readonly string[]).includes(v.ssl_mode)) issue("ssl_mode", "This SSL mode isn't available for this database type.")
     })
 }
 export type DatabaseValues = z.infer<ReturnType<typeof databaseSchema>>

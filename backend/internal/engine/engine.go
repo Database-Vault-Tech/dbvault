@@ -18,6 +18,7 @@ const (
 	Postgres = "postgres"
 	MySQL    = "mysql"
 	MariaDB  = "mariadb"
+	SQLite   = "sqlite"
 )
 
 // Target holds everything needed to connect to a database. Password is
@@ -31,6 +32,10 @@ type Target struct {
 	Password    string `json:"-"`
 	SSLMode     string
 	SSLRootCert string
+	// Dir is the directory file-based engines resolve Database (a relative
+	// path) against. Empty means the driver's configured root; restore
+	// sandboxes set it to a private temporary directory.
+	Dir string `json:"-"`
 }
 
 // ServerInfo describes a server and database, as shown by connection tests.
@@ -93,6 +98,17 @@ type Capabilities struct {
 	AtomicRestore bool `json:"atomic_restore"`
 	// Schemas is true when tables live in named schemas within a database.
 	Schemas bool `json:"schemas"`
+	// FileBased is true when a database is a file under a directory mounted
+	// into DBVault (SQLite): there is no host, port or login, and
+	// Target.Database is a path relative to that directory.
+	FileBased bool `json:"file_based"`
+}
+
+// Availability is optionally implemented by drivers that need instance
+// configuration before they can be used (SQLite needs SQLITE_ROOT).
+type Availability interface {
+	// Unavailable returns why the engine can't be used, or "".
+	Unavailable() string
 }
 
 // Logger receives user-visible job log lines.

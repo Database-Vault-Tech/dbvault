@@ -24,7 +24,7 @@ export function StructuredData() {
       isAccessibleForFree: true,
       offers: { "@type": "Offer", price: "0", priceCurrency: "USD", availability: "https://schema.org/InStock" },
       featureList: [
-        "Automated PostgreSQL, MySQL and MariaDB backups",
+        "Automated PostgreSQL, MySQL, MariaDB and SQLite backups",
         "Scheduled backups with cron expressions and timezones",
         "End-to-end encryption with age (X25519 + ChaCha20-Poly1305)",
         "SHA-256 checksums verified after upload and before restore",

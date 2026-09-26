@@ -41,13 +41,23 @@ type EngineInfo struct {
 	DefaultSSLMode string              `json:"default_ssl_mode"`
 	FileExtension  string              `json:"file_extension"`
 	Capabilities   engine.Capabilities `json:"capabilities"`
+	// Available is false when the engine needs instance configuration
+	// first; UnavailableReason says what to do.
+	Available         bool   `json:"available"`
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
 }
 
 func (s *Service) handleEngines(w http.ResponseWriter, r *http.Request) {
 	out := []EngineInfo{}
 	for _, d := range s.Drivers.Drivers() {
-		out = append(out, EngineInfo{Name: d.Name(), Label: d.Label(), DefaultPort: d.DefaultPort(), SSLModes: d.SSLModes(),
-			DefaultSSLMode: d.DefaultSSLMode(), FileExtension: d.FileExtension(), Capabilities: d.Capabilities()})
+		info := EngineInfo{Name: d.Name(), Label: d.Label(), DefaultPort: d.DefaultPort(), SSLModes: d.SSLModes(),
+			DefaultSSLMode: d.DefaultSSLMode(), FileExtension: d.FileExtension(), Capabilities: d.Capabilities(), Available: true}
+		if a, ok := d.(engine.Availability); ok {
+			if reason := a.Unavailable(); reason != "" {
+				info.Available, info.UnavailableReason = false, reason
+			}
+		}
+		out = append(out, info)
 	}
 	httpx.JSON(w, http.StatusOK, out)
 }

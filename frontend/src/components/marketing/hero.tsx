@@ -33,7 +33,7 @@ export function Hero() {
           </h1>
           <p className="animate-fade-up mt-6 max-w-2xl text-base text-pretty text-muted-foreground sm:text-lg" style={{ animationDelay: "120ms" }}>
             Protect your SQL databases with automated backups, encrypted storage, retention policies, restore testing, and a beautiful developer-friendly
-            dashboard. PostgreSQL, MySQL and MariaDB today, with SQL Server and SQLite on the way.
+            dashboard. PostgreSQL, MySQL, MariaDB and SQLite today, with SQL Server on the way.
           </p>
           <div className="animate-fade-up mt-8 flex w-full flex-col items-center justify-center gap-3 sm:w-auto sm:flex-row" style={{ animationDelay: "180ms" }}>
             <Button size="lg" asChild className="h-10 w-full px-5 sm:w-auto bg-brand text-brand-foreground hover:bg-brand/90 font-semibold shadow-[0_0_24px_-6px_var(--brand)]">

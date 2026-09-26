@@ -20,6 +20,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/engine"
 	"github.com/dbvault/dbvault/backend/internal/engine/mysql"
 	"github.com/dbvault/dbvault/backend/internal/engine/postgres"
+	"github.com/dbvault/dbvault/backend/internal/engine/sqlite"
 	"github.com/dbvault/dbvault/backend/internal/jobs"
 	"github.com/dbvault/dbvault/backend/internal/notifications"
 	"github.com/dbvault/dbvault/backend/internal/organizations"
@@ -110,7 +111,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 	a.Postgres = postgres.New(a.Tools, cfg.WorkDir)
 	a.MySQL = mysql.NewMySQL(cfg.MySQLBinDir, cfg.WorkDir)
 	a.MariaDB = mysql.NewMariaDB(cfg.MySQLBinDir, cfg.WorkDir)
-	a.Drivers = engine.NewRegistry(a.Postgres, a.MySQL, a.MariaDB)
+	a.Drivers = engine.NewRegistry(a.Postgres, a.MySQL, a.MariaDB, sqlite.New(cfg.SQLiteRoot, cfg.WorkDir))
 	hasher := auth.NewHasher(cfg.AuthSecret)
 
 	a.Organizations = &organizations.Service{Pool: pool, Keys: a.Keys, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL}

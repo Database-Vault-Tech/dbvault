@@ -4,7 +4,7 @@ import { Section, SectionHeading } from "./primitives"
 export const FAQS = [
   {
     q: "Which databases does DBVault back up?",
-    a: "PostgreSQL 9.2 to 18, MySQL 5.7 to 9, and MariaDB 10 and 11. Each engine is backed up with its own native tooling — pg_dump and pg_restore for PostgreSQL, mariadb-dump and the mariadb client for MySQL and MariaDB — so the artifacts are ordinary dumps you can restore without DBVault. SQL Server and SQLite are planned.",
+    a: "PostgreSQL 9.2 to 18, MySQL 5.7 to 9, MariaDB 10 and 11, and SQLite 3. Each engine is backed up with its own native tooling — pg_dump and pg_restore for PostgreSQL, mariadb-dump and the mariadb client for MySQL and MariaDB, and consistent VACUUM INTO snapshots for SQLite files — so the artifacts are ordinary dumps and database files you can restore without DBVault. SQL Server is planned.",
   },
   {
     q: "Where are the backups stored?",

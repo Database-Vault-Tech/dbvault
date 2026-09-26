@@ -15,6 +15,7 @@ import {
   CommandSeparator,
 } from "@/components/ui/command"
 import { Kbd } from "@/components/ui/kbd"
+import { databaseLocation } from "@/lib/engines"
 import { useDatabases } from "@/lib/queries"
 
 import { primaryNav, secondaryNav } from "./nav"
@@ -71,11 +72,11 @@ export function CommandMenu() {
               <CommandSeparator />
               <CommandGroup heading="Databases">
                 {databases.map((d) => (
-                  <CommandItem key={d.id} value={`database ${d.name} ${d.host}`} onSelect={() => go(`/databases/${d.id}`)}>
+                  <CommandItem key={d.id} value={`database ${d.name} ${d.host} ${d.database}`} onSelect={() => go(`/databases/${d.id}`)}>
                     <Database />
                     <span>{d.name}</span>
                     <span className="ml-auto truncate font-mono text-xs text-muted-foreground">
-                      {d.host}/{d.database}
+                      {databaseLocation(d, false)}
                     </span>
                   </CommandItem>
                 ))}

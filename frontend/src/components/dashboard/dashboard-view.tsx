@@ -97,7 +97,7 @@ export function DashboardView() {
               description={
                 s?.databases
                   ? "Run a backup now, or create a schedule and DBVault will take it from there."
-                  : "Connect your first PostgreSQL, MySQL or MariaDB database and DBVault will start protecting it."
+                  : "Connect your first PostgreSQL, MySQL, MariaDB or SQLite database and DBVault will start protecting it."
               }
               action={
                 s?.databases ? (

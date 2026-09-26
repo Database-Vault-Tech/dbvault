@@ -49,3 +49,19 @@ func TestValidatorCollectsFirstError(t *testing.T) {
 		t.Fatal("empty validator should pass")
 	}
 }
+
+func TestIsRelativeFilePath(t *testing.T) {
+	good := []string{"app.db", "myapp/app.db", "data/prod-2026 (copy).sqlite3", "a/b/c/d.db", "user@host.db", ".hidden.db"}
+	bad := []string{"", "/etc/passwd", "../app.db", "a/../../b.db", "./app.db", "a//b.db", "a/", "C:\\x.db", "a\\b.db",
+		"-rf.db", "a/-x.db", " app.db", "app.db ", "a\x00b", "a/./b.db", "..", "~/app.db"}
+	for _, p := range good {
+		if !IsRelativeFilePath(p) {
+			t.Errorf("%q should be accepted", p)
+		}
+	}
+	for _, p := range bad {
+		if IsRelativeFilePath(p) {
+			t.Errorf("%q should be rejected", p)
+		}
+	}
+}

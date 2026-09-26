@@ -19,7 +19,7 @@ const FEATURES = [
   {
     icon: Archive,
     title: "Automated backups",
-    body: "A Go worker runs the database's native dump tool (pg_dump for PostgreSQL, mariadb-dump for MySQL and MariaDB) and streams it through compression, encryption and upload in a single pass — nothing is staged on disk.",
+    body: "A Go worker runs the database's native dump tool (pg_dump for PostgreSQL, mariadb-dump for MySQL and MariaDB, a VACUUM INTO snapshot for SQLite) and streams it through compression, encryption and upload in a single pass.",
   },
   {
     icon: CalendarClock,
@@ -29,7 +29,7 @@ const FEATURES = [
   {
     icon: Database,
     title: "SQL databases",
-    body: "Built on each engine's official tooling. PostgreSQL (9.2 – 18), MySQL (5.7+) and MariaDB (10+) are fully supported; SQL Server and SQLite are next.",
+    body: "Built on each engine's official tooling. PostgreSQL (9.2 – 18), MySQL (5.7+), MariaDB (10+) and SQLite are fully supported; SQL Server is next.",
   },
   {
     icon: Cloud,

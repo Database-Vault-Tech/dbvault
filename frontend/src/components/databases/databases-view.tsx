@@ -15,7 +15,7 @@ import { TableSkeleton } from "@/components/app/table-skeleton"
 import { Button } from "@/components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
-import { ENGINE_LIST, engineMeta } from "@/lib/engines"
+import { databaseLocation, ENGINE_LIST, engineMeta } from "@/lib/engines"
 import { formatBytes } from "@/lib/format"
 import { useOrg } from "@/lib/org"
 import { useDatabases } from "@/lib/queries"
@@ -64,7 +64,7 @@ export function DatabasesView() {
     <div>
       <PageHeader
         title="Databases"
-        description="PostgreSQL, MySQL and MariaDB databases DBVault protects. Credentials are encrypted at rest and never returned by the API."
+        description="PostgreSQL, MySQL, MariaDB and SQLite databases DBVault protects. Credentials are encrypted at rest and never returned by the API."
         actions={
           can("admin") && (
             <Button asChild>
@@ -118,7 +118,7 @@ export function DatabasesView() {
           <EmptyState
             icon={DatabaseIcon}
             title="No databases yet."
-            description="Connect your first PostgreSQL, MySQL or MariaDB database and DBVault will start protecting it."
+            description="Connect your first PostgreSQL, MySQL, MariaDB or SQLite database and DBVault will start protecting it."
             action={
               can("admin") && (
                 <Button asChild>
@@ -153,9 +153,7 @@ export function DatabasesView() {
                         {db.name}
                       </Link>
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <span className="max-w-64 truncate font-mono">
-                          {db.host}:{db.port}/{db.database}
-                        </span>
+                        <span className="max-w-64 truncate font-mono">{databaseLocation(db)}</span>
                         <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] text-muted-foreground">
                           {engineMeta(db.engine).shortLabel}
                           {db.pg_version && ` ${db.pg_version}`}

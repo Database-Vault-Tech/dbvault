@@ -192,6 +192,15 @@ func (in *Input) Validate(drivers *engine.Registry, requirePassword bool) error 
 	v := validate.New()
 	v.Required("name", in.Name)
 	v.Check(v.Has("name") || validate.IsResourceName(in.Name), "name", "Use letters, numbers, spaces, dots, dashes or underscores (max 63).")
+	if drv.Capabilities().FileBased {
+		// A file inside the mounted folder: no server, login or TLS.
+		in.Host, in.Port, in.Username, in.Password, in.SSLRootCert = "", 0, "", nil, nil
+		in.SSLMode = drv.DefaultSSLMode()
+		v.Required("database", in.DatabaseName)
+		v.Check(v.Has("database") || validate.IsRelativeFilePath(in.DatabaseName), "database",
+			"Enter a path inside the SQLite folder, like app/data.db (letters, numbers, dots, dashes, underscores and / only).")
+		return v.Err()
+	}
 	v.Required("host", in.Host)
 	v.Check(v.Has("host") || validate.IsHost(in.Host), "host", "Must be a hostname or IP address.")
 	v.Range("port", in.Port, 1, 65535)
@@ -233,7 +242,11 @@ func (in Input) Target() Target {
 // Create stores a database with its password sealed.
 func (s *Service) Create(ctx context.Context, orgID, userID string, in Input) (Database, error) {
 	id := uuid.NewString()
-	sealed, err := s.Sealer.SealString(*in.Password, passwordAAD(id))
+	password := ""
+	if in.Password != nil {
+		password = *in.Password // nil for file-based engines, which have no login
+	}
+	sealed, err := s.Sealer.SealString(password, passwordAAD(id))
 	if err != nil {
 		return Database{}, err
 	}

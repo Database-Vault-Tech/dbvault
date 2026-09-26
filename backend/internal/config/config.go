@@ -52,6 +52,9 @@ type Config struct {
 
 	// Filesystem storage root. Local storage destinations are confined to it.
 	LocalStorageRoot string
+	// SQLiteRoot is the folder holding SQLite database files that can be
+	// backed up and restored. Empty disables SQLite.
+	SQLiteRoot string
 
 	// Worker
 	WorkerConcurrency   int
@@ -123,6 +126,7 @@ func Load() (*Config, error) {
 		RedisURL:                   env("REDIS_URL", "redis://localhost:6379/0"),
 		MigrateOnStart:             envBool("MIGRATE_ON_START", true),
 		LocalStorageRoot:           env("LOCAL_STORAGE_ROOT", "/var/lib/dbvault/backups"),
+		SQLiteRoot:                 env("SQLITE_ROOT", ""),
 		WorkerConcurrency:          envInt("WORKER_CONCURRENCY", 2),
 		WorkerHealthAddr:           env("WORKER_HEALTH_ADDR", ":8081"),
 		WorkDir:                    env("WORK_DIR", filepath.Join(os.TempDir(), "dbvault")),

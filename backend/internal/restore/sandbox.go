@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -183,4 +184,30 @@ func (m ServerSandboxes) Provision(ctx context.Context, drv engine.Driver, major
 		return nil, err
 	}
 	return sb.Provision(ctx, drv, major)
+}
+
+// FileSandbox tests file-based engines (SQLite) by restoring into a private
+// temporary directory on the worker.
+type FileSandbox struct {
+	WorkDir string
+}
+
+func (FileSandbox) Name() string { return "temporary file" }
+
+func (FileSandbox) Check(ctx context.Context, drv engine.Driver) error { return nil }
+
+func (f FileSandbox) Provision(ctx context.Context, drv engine.Driver, major int) (*Instance, error) {
+	if err := os.MkdirAll(f.WorkDir, 0o700); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(f.WorkDir, "verify-"+drv.Name()+"-")
+	if err != nil {
+		return nil, err
+	}
+	return &Instance{
+		Target:      engine.Target{Engine: drv.Name(), Dir: dir},
+		DBName:      "verify" + drv.FileExtension(),
+		Description: drv.Label() + " file in a temporary folder on the worker",
+		destroy:     func(context.Context) error { return os.RemoveAll(dir) },
+	}, nil
 }

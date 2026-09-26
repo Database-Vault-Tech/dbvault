@@ -93,3 +93,22 @@ var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9 _.\-]{0,62}$`)
 
 // IsResourceName reports whether s is a valid human-facing resource name.
 func IsResourceName(s string) bool { return nameRE.MatchString(s) }
+
+// relPathRE allows the characters people use in file and folder names,
+// separated by forward slashes.
+var relPathRE = regexp.MustCompile(`^[A-Za-z0-9._\- +@()]+(/[A-Za-z0-9._\- +@()]+)*$`)
+
+// IsRelativeFilePath reports whether s is a safe path to a file inside a
+// configured directory: relative, forward slashes, no "." or ".." segments,
+// no hidden leading dash, at most 255 bytes.
+func IsRelativeFilePath(s string) bool {
+	if s == "" || len(s) > 255 || !relPathRE.MatchString(s) {
+		return false
+	}
+	for _, seg := range strings.Split(s, "/") {
+		if seg == "." || seg == ".." || strings.HasPrefix(seg, "-") || strings.TrimSpace(seg) != seg {
+			return false
+		}
+	}
+	return true
+}
