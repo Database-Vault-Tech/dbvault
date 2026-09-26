@@ -150,7 +150,7 @@ function SessionsCard() {
         ) : (
           <div className="space-y-3">
             {(sessions.data?.length ?? 0) > 1 && (
-              <TableToolbar className="mb-0">
+              <TableToolbar>
                 <TableSearch value={search} onChange={setSearch} placeholder="Search device or IP…" />
               </TableToolbar>
             )}
@@ -235,7 +235,7 @@ function TokensCard() {
         ) : (
           <div className="space-y-3">
             {(tokens.data?.length ?? 0) > 1 && (
-              <TableToolbar className="mb-0">
+              <TableToolbar>
                 <TableSearch value={search} onChange={setSearch} placeholder="Search tokens…" />
               </TableToolbar>
             )}
