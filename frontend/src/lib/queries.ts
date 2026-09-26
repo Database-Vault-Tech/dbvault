@@ -51,6 +51,8 @@ import type {
   StorageInput,
   StorageTest,
   SystemStatus,
+  TotpSetup,
+  TwoFactorStatus,
 } from "./types"
 
 /** Builds a filter query string, dropping empty values, plus the cursor. */
@@ -89,6 +91,7 @@ export const keys = {
   invitations: ["team", "invitations"] as const,
   sessions: ["sessions"] as const,
   tokens: ["tokens"] as const,
+  twoFactor: ["two-factor"] as const,
 }
 
 const ACTIVE_JOB = new Set(["queued", "running"])
@@ -670,6 +673,43 @@ export function useRevokeApiToken() {
   return useMutation({
     mutationFn: (id: string) => api.delete(`/auth/tokens/${id}`, { noOrg: true }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: keys.tokens }),
+  })
+}
+
+export function useTwoFactor() {
+  return useQuery({ queryKey: keys.twoFactor, queryFn: () => api.get<TwoFactorStatus>("/auth/2fa", { noOrg: true }) })
+}
+
+export function useSetupTwoFactor() {
+  return useMutation({ mutationFn: (password: string) => api.post<TotpSetup>("/auth/2fa/setup", { password }, { noOrg: true }) })
+}
+
+export function useEnableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (code: string) => api.post<{ recovery_codes: string[] }>("/auth/2fa/enable", { code }, { noOrg: true }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: keys.twoFactor })
+      // Enabling signs out every other session.
+      void qc.invalidateQueries({ queryKey: keys.sessions })
+    },
+  })
+}
+
+export function useDisableTwoFactor() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { password: string; code: string }) => api.post("/auth/2fa/disable", input, { noOrg: true }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.twoFactor }),
+  })
+}
+
+export function useRegenerateRecoveryCodes() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: { password: string; code: string }) =>
+      api.post<{ recovery_codes: string[] }>("/auth/2fa/recovery-codes", input, { noOrg: true }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: keys.twoFactor }),
   })
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/dbvault/dbvault/backend/internal/apperr"
 	"github.com/dbvault/dbvault/backend/internal/audit"
 	"github.com/dbvault/dbvault/backend/internal/db"
+	"github.com/dbvault/dbvault/backend/internal/encryption"
 	"github.com/dbvault/dbvault/backend/internal/reqctx"
 )
 
@@ -35,6 +36,7 @@ type OrgCreator func(ctx context.Context, tx pgx.Tx, userID, userName string) (s
 type Service struct {
 	Pool              *pgxpool.Pool
 	Hasher            *Hasher
+	Sealer            *encryption.Sealer // seals TOTP secrets
 	Mailer            Mailer
 	AppURL            string
 	AllowRegistration bool
@@ -124,7 +126,8 @@ func (s *Service) Register(ctx context.Context, name, email, password, inviteTok
 // ErrInvalidCredentials is deliberately generic.
 var ErrInvalidCredentials = apperr.Unauthorized("Invalid email or password.")
 
-// Authenticate verifies credentials without creating a session.
+// Authenticate verifies the password only. Callers must still check the
+// second factor (see Login and ExchangeForAPIToken).
 func (s *Service) Authenticate(ctx context.Context, email, password string) (User, error) {
 	email = normalizeEmail(email)
 	var user User
@@ -147,23 +150,65 @@ func (s *Service) Authenticate(ctx context.Context, email, password string) (Use
 		audit.MustRecord(ctx, s.Pool, audit.Entry{Action: audit.UserLoginFailed, ActorEmail: email, ResourceType: "user", ResourceID: user.ID, Metadata: map[string]any{"reason": "bad_password"}})
 		return User{}, ErrInvalidCredentials
 	}
-	_, _ = s.Pool.Exec(ctx, `UPDATE users SET last_login_at = now() WHERE id = $1`, user.ID)
 	return user, nil
 }
 
-// Login verifies credentials and creates a browser session.
-func (s *Service) Login(ctx context.Context, email, password string) (SessionResult, error) {
+// MFAChallenge is returned by Login instead of a session when the account
+// has two-factor authentication enabled.
+type MFAChallenge struct {
+	Token     string
+	ExpiresAt time.Time
+}
+
+// Login verifies credentials and creates a browser session, or, when 2FA
+// is enabled, returns a challenge to complete with CompleteMFALogin.
+func (s *Service) Login(ctx context.Context, email, password string) (SessionResult, *MFAChallenge, error) {
 	user, err := s.Authenticate(ctx, email, password)
 	if err != nil {
-		return SessionResult{}, err
+		return SessionResult{}, nil, err
 	}
+	enabled, err := s.twoFactorEnabled(ctx, user.ID)
+	if err != nil {
+		return SessionResult{}, nil, err
+	}
+	if enabled {
+		token, expires, err := s.startMFAChallenge(ctx, user.ID)
+		if err != nil {
+			return SessionResult{}, nil, err
+		}
+		return SessionResult{}, &MFAChallenge{Token: token, ExpiresAt: expires}, nil
+	}
+	res, err := s.finishLogin(ctx, user, nil)
+	return res, nil, err
+}
+
+// finishLogin creates the session once every factor has been checked.
+func (s *Service) finishLogin(ctx context.Context, user User, meta map[string]any) (SessionResult, error) {
+	_, _ = s.Pool.Exec(ctx, `UPDATE users SET last_login_at = now() WHERE id = $1`, user.ID)
 	res, err := s.createSession(ctx, user)
 	if err != nil {
 		return res, err
 	}
 	actx := reqctx.WithPrincipal(ctx, reqctx.Principal{UserID: user.ID, Email: user.Email, Name: user.Name, SessionID: res.SessionID})
-	audit.MustRecord(actx, s.Pool, audit.Entry{Action: audit.UserLoggedIn, ResourceType: "user", ResourceID: user.ID})
+	audit.MustRecord(actx, s.Pool, audit.Entry{Action: audit.UserLoggedIn, ResourceType: "user", ResourceID: user.ID, Metadata: meta})
 	return res, nil
+}
+
+// ExchangeForAPIToken signs in non-interactively (`dbvault init`) and issues
+// an API token. With 2FA enabled the code must be sent too; without it the
+// error code is "mfa_required" so the client knows to prompt.
+func (s *Service) ExchangeForAPIToken(ctx context.Context, email, password, code, name string) (APIToken, string, User, error) {
+	user, err := s.Authenticate(ctx, email, password)
+	if err != nil {
+		return APIToken{}, "", User{}, err
+	}
+	ctx = reqctx.WithPrincipal(ctx, reqctx.Principal{UserID: user.ID, Email: user.Email, Name: user.Name})
+	if _, err := s.requireSecondFactor(ctx, user.ID, code); err != nil {
+		return APIToken{}, "", User{}, err
+	}
+	_, _ = s.Pool.Exec(ctx, `UPDATE users SET last_login_at = now() WHERE id = $1`, user.ID)
+	t, secret, err := s.CreateAPIToken(ctx, user.ID, name, 0)
+	return t, secret, user, err
 }
 
 func (s *Service) createSession(ctx context.Context, user User) (SessionResult, error) {
@@ -277,6 +322,9 @@ func (s *Service) ChangePassword(ctx context.Context, p reqctx.Principal, curren
 		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND id::text <> $2`, p.UserID, p.SessionID); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(ctx, `DELETE FROM mfa_challenges WHERE user_id = $1`, p.UserID); err != nil {
+			return err
+		}
 		return audit.Record(ctx, tx, audit.Entry{Action: audit.UserPasswordChanged, ResourceType: "user", ResourceID: p.UserID})
 	})
 }
@@ -345,6 +393,11 @@ func (s *Service) ResetPassword(ctx context.Context, token, password string) err
 			return err
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+			return err
+		}
+		// Two-factor stays on: an attacker who controls the mailbox still
+		// can't sign in without the authenticator or a recovery code.
+		if _, err := tx.Exec(ctx, `DELETE FROM mfa_challenges WHERE user_id = $1`, userID); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Entry{Action: audit.UserPasswordReset, ResourceType: "user", ResourceID: userID})
@@ -444,9 +497,13 @@ func (s *Service) RevokeAPIToken(ctx context.Context, userID, id string) error {
 	return nil
 }
 
-// PurgeExpired removes expired sessions and reset tokens (run by the scheduler).
+// PurgeExpired removes expired sessions, sign-in challenges and reset
+// tokens (run by the scheduler).
 func PurgeExpired(ctx context.Context, pool *pgxpool.Pool) error {
 	if _, err := pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`); err != nil {
+		return err
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM mfa_challenges WHERE expires_at < now()`); err != nil {
 		return err
 	}
 	_, err := pool.Exec(ctx, `DELETE FROM password_reset_tokens WHERE expires_at < now() - interval '1 day'`)

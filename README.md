@@ -53,6 +53,7 @@ Checksum: 9f2c4e1a…
 | **Retention** | Grandfather-father-son policies (daily / weekly / monthly) with a preview of exactly what will be kept and deleted. |
 | **Notifications** | Email and HMAC-signed webhooks for failures, successes, restores and storage problems. Slack/Discord-ready sender interface. |
 | **Teams & audit log** | Organizations, owner/admin/member/viewer roles, invitations, and an append-only audit log of every sensitive action. |
+| **Two-factor sign-in** | TOTP authenticator codes (any authenticator app) with single-use recovery codes, also enforced by `dbvault init`. See [docs/security.md](docs/security.md#two-factor-authentication). |
 | **CLI** | `dbvault init`, `backup`, `verify`, `restore`, `status`… for scripts and terminals. |
 | **Docker** | `docker compose up -d` gives you the app, API, worker, scheduler, PostgreSQL, Redis, MinIO and Mailpit. |
 

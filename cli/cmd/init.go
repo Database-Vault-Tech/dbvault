@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 var (
 	initToken string
 	initEmail string
+	initCode  string
 )
 
 var initCmd = &cobra.Command{
@@ -56,7 +58,15 @@ machine), or pass an existing token from Settings → Security → API tokens:
 				Token string      `json:"token"`
 				User  client.User `json:"user"`
 			}
-			if err := client.New(server, "", "").Post(ctx, "/auth/token", map[string]string{"email": email, "password": password, "name": "CLI on " + hostname()}, &res); err != nil {
+			body := map[string]string{"email": email, "password": password, "name": "CLI on " + hostname(), "code": initCode}
+			anon := client.New(server, "", "")
+			err = anon.Post(ctx, "/auth/token", body, &res)
+			// Accounts with two-factor authentication need a code as well.
+			if apiErr := (*client.Error)(nil); errors.As(err, &apiErr) && apiErr.Code == "mfa_required" && initCode == "" {
+				body["code"] = ui.Prompt("Authentication code (or a recovery code)", "")
+				err = anon.Post(ctx, "/auth/token", body, &res)
+			}
+			if err != nil {
 				return err
 			}
 			token = res.Token
@@ -104,5 +114,6 @@ machine), or pass an existing token from Settings → Security → API tokens:
 func init() {
 	initCmd.Flags().StringVar(&initToken, "token", "", "existing API token (skips the password prompt)")
 	initCmd.Flags().StringVar(&initEmail, "email", "", "account email")
+	initCmd.Flags().StringVar(&initCode, "code", "", "two-factor authentication code, if enabled (prompted for when needed)")
 	rootCmd.AddCommand(initCmd)
 }

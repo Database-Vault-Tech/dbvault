@@ -32,15 +32,17 @@ import { useApiTokens, useChangePassword, useCreateApiToken, useExportRecoveryKe
 import type { ApiToken, Session } from "@/lib/types"
 
 import { SettingsNav } from "./settings-nav"
+import { TwoFactorCard } from "./two-factor-card"
 
 export function SecuritySettings() {
   const { can } = useOrg()
   return (
     <div>
-      <PageHeader title="Security" description="Password, sessions, API tokens for the CLI, and your backup recovery key." />
+      <PageHeader title="Security" description="Password, two-factor authentication, sessions, API tokens for the CLI, and your backup recovery key." />
       <SettingsNav />
       <div className="space-y-6">
         <PasswordCard />
+        <TwoFactorCard />
         <SessionsCard />
         <TokensCard />
         {can("owner") && <RecoveryKeyCard />}

@@ -114,7 +114,7 @@ func New(ctx context.Context, cfg *config.Config, log *slog.Logger, role Role) (
 	hasher := auth.NewHasher(cfg.AuthSecret)
 
 	a.Organizations = &organizations.Service{Pool: pool, Keys: a.Keys, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL}
-	a.Auth = &auth.Service{Pool: pool, Hasher: hasher, Mailer: a.Mailer, AppURL: cfg.AppURL, AllowRegistration: cfg.AllowRegistration,
+	a.Auth = &auth.Service{Pool: pool, Hasher: hasher, Sealer: sealer, Mailer: a.Mailer, AppURL: cfg.AppURL, AllowRegistration: cfg.AllowRegistration,
 		CreateOrg: a.Organizations.CreatePersonal}
 	a.Databases = &database.Service{Pool: pool, Sealer: sealer, WorkDir: cfg.WorkDir, Drivers: a.Drivers}
 	a.Destinations = &storage.DestinationService{Pool: pool, Sealer: sealer, Options: storage.Options{LocalRoot: cfg.LocalStorageRoot}, Builtin: cfg.S3}
