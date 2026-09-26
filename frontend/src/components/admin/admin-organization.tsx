@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { engineMeta } from "@/lib/engines"
+import { databaseLocation, engineMeta } from "@/lib/engines"
 import { formatBytes, formatDuration, humanizeAction, storageLabels } from "@/lib/format"
 import { useAdminOrganization } from "@/lib/queries"
 
@@ -140,9 +140,7 @@ export function AdminOrganization({ id }: { id: string }) {
                 <TableCell className="pl-6">
                   <div className="font-medium">{d.name}</div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="max-w-64 truncate font-mono">
-                      {d.host}:{d.port}/{d.database}
-                    </span>
+                    <span className="max-w-64 truncate font-mono">{databaseLocation(d)}</span>
                     <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px]">
                       {engineMeta(d.engine).shortLabel}
                       {d.version && ` ${d.version}`}
