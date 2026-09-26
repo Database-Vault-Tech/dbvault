@@ -84,7 +84,11 @@ func (e *Engine) Run(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	log.Infof("Connecting to %s at %s:%d", drv.Label(), req.Target.Host, req.Target.Port)
+	if drv.Capabilities().FileBased {
+		log.Infof("Opening %s database %s", drv.Label(), req.Target.Database)
+	} else {
+		log.Infof("Connecting to %s at %s:%d", drv.Label(), req.Target.Host, req.Target.Port)
+	}
 	info, err := drv.Inspect(ctx, req.Target)
 	if err != nil {
 		return res, fmt.Errorf("connect: %w", err)
