@@ -16,9 +16,10 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
 import { ApiError, errorMessage } from "@/lib/api"
-import { engineMeta } from "@/lib/engines"
+import { databaseLocation, engineMeta } from "@/lib/engines"
 import { formatBytes, formatDateTime, formatRelative } from "@/lib/format"
 import { useBackup, useBackups, useCreateRestore, useDatabases } from "@/lib/queries"
+import { isSQLitePath } from "@/lib/schemas"
 import { cn } from "@/lib/utils"
 
 const IDENT = /^[a-zA-Z_][a-zA-Z0-9_-]{0,62}$/
@@ -27,7 +28,12 @@ function yyyymmdd(d = new Date()) {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`
 }
 
-function suggestName(database: string) {
+function suggestName(database: string, fileBased: boolean) {
+  if (fileBased) {
+    // app/shop.db → app/shop-restored-20260926.db, next to the original.
+    const m = /^(.*?)(\.[A-Za-z0-9]+)?$/.exec(database)
+    return `${m?.[1] ?? database}-restored-${yyyymmdd()}${m?.[2] ?? ""}`
+  }
   const base = database.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^[^a-zA-Z_]/, "_$&")
   return `${base}_restored_${yyyymmdd()}`.slice(0, 63)
 }
@@ -106,9 +112,14 @@ export function RestoreWizard({
   const targets = databases?.filter((d) => engineMeta(d.engine).id === engine.id)
   const target = targets?.find((d) => d.id === targetId)
   const createPrivilege = engine.id === "postgres" ? "CREATEDB privilege" : "CREATE privilege"
+  // What "new" creates, and what it needs, in the engine's own terms.
+  const newThing = engine.fileBased ? "file" : "database"
+  const createNeeds = engine.fileBased
+    ? "DBVault needs write access to the folder the file goes in."
+    : `The database user needs the ${createPrivilege} on the target server.`
   // Suggest a name until the user types their own.
-  const newName = nameInput ?? (target ? suggestName(target.database) : "")
-  const nameValid = mode === "existing" || IDENT.test(newName)
+  const newName = nameInput ?? (target ? suggestName(target.database, engine.fileBased) : "")
+  const nameValid = mode === "existing" || (engine.fileBased ? isSQLitePath(newName) : IDENT.test(newName))
   // Only flag the name as invalid once there is something to judge; an empty
   // field before a target is chosen is not an error yet.
   const showNameError = mode === "new" && newName !== "" && !nameValid
@@ -208,7 +219,7 @@ export function RestoreWizard({
 
         <Step n={3} title="Destination" disabled={!backupId}>
           <Field className="sm:max-w-80">
-            <FieldLabel>Target database server</FieldLabel>
+            <FieldLabel>{engine.fileBased ? "Target database" : "Target database server"}</FieldLabel>
             <Select value={targetId} onValueChange={setTargetId}>
               <SelectTrigger className="w-full" aria-label="Target database">
                 <SelectValue placeholder="Select target" />
@@ -216,7 +227,7 @@ export function RestoreWizard({
               <SelectContent>
                 {targets?.map((d) => (
                   <SelectItem key={d.id} value={d.id}>
-                    {d.name} <span className="font-mono text-xs text-muted-foreground">{d.host}/{d.database}</span>
+                    {d.name} <span className="font-mono text-xs text-muted-foreground">{databaseLocation(d, false)}</span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -227,19 +238,23 @@ export function RestoreWizard({
               <RadioGroupItem id="mode-new" value="new" className="mt-0.5" />
               <span>
                 <span className="flex items-center gap-1.5 text-sm font-medium">
-                  <DatabaseZap className="size-4" /> Restore into a new database
+                  <DatabaseZap className="size-4" /> Restore into a new {newThing}
                 </span>
-                <span className="block text-xs text-muted-foreground">Safe: creates a fresh database on the target server. Existing data is untouched.</span>
+                <span className="block text-xs text-muted-foreground">
+                  {engine.fileBased
+                    ? "Safe: writes a new file in the SQLite folder. Existing files are untouched."
+                    : "Safe: creates a fresh database on the target server. Existing data is untouched."}
+                </span>
               </span>
             </Label>
             <Label htmlFor="mode-existing" className={cn("flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal", mode === "existing" && "border-destructive ring-1 ring-destructive/30")}>
               <RadioGroupItem id="mode-existing" value="existing" className="mt-0.5" />
               <span>
                 <span className="flex items-center gap-1.5 text-sm font-medium">
-                  <AlertTriangle className="size-4 text-destructive" /> Restore into the existing database
+                  <AlertTriangle className="size-4 text-destructive" /> Restore into the existing {newThing}
                 </span>
                 <span className="block text-xs text-muted-foreground">
-                  Destructive: replaces objects in {target?.database ?? "the target database"}.
+                  Destructive: {engine.fileBased ? "replaces" : "replaces objects in"} {target?.database ?? `the target ${newThing}`}.
                   {!engine.atomicRestore && " Not transactional."}
                 </span>
               </span>
@@ -247,21 +262,27 @@ export function RestoreWizard({
           </RadioGroup>
           {mode === "new" ? (
             <Field data-invalid={showNameError} className="sm:max-w-80">
-              <FieldLabel htmlFor="new-name">New database name</FieldLabel>
+              <FieldLabel htmlFor="new-name">{engine.fileBased ? "New file path" : "New database name"}</FieldLabel>
               <Input id="new-name" className="font-mono" value={newName} onChange={(e) => setNameInput(e.target.value)} />
               {nameIsTarget ? (
                 <Alert className="mt-1 border-warning/40 bg-warning/5">
                   <AlertTriangle className="text-warning" />
-                  <AlertTitle>{target?.database} already exists on this server</AlertTitle>
+                  <AlertTitle>
+                    {target?.database} already exists {engine.fileBased ? "in the SQLite folder" : "on this server"}
+                  </AlertTitle>
                   <AlertDescription>
-                    <p>A new database needs a new name. To put the backup into {target?.database} itself, restore into the existing database.</p>
+                    <p>
+                      A new {newThing} needs a new name. To put the backup into {target?.database} itself, restore into the existing {newThing}.
+                    </p>
                     <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setMode("existing")}>
                       Restore into {target?.database} instead
                     </Button>
                   </AlertDescription>
                 </Alert>
               ) : !showNameError ? (
-                <FieldDescription>The database user needs the {createPrivilege} on the target server.</FieldDescription>
+                <FieldDescription>{createNeeds}</FieldDescription>
+              ) : engine.fileBased ? (
+                <FieldError>Use a path inside the SQLite folder, like app/restored.db (no leading /, no ..).</FieldError>
               ) : (
                 <FieldError>Start with a letter or underscore; use letters, numbers, _ or - (max 63).</FieldError>
               )}
@@ -271,8 +292,19 @@ export function RestoreWizard({
               <AlertTriangle />
               <AlertTitle>Restoring this backup may overwrite existing data.</AlertTitle>
               <AlertDescription>
-                Every table, view and function contained in the backup is dropped and recreated in <span className="font-mono">{target?.database}</span>.{" "}
-                {engine.atomicRestore
+                {engine.fileBased ? (
+                  <>
+                    <span className="font-mono">{target?.database}</span> is replaced by the backup. Stop the application using it first: DBVault refuses to
+                    replace a file that&apos;s in use.
+                  </>
+                ) : (
+                  <>
+                    Every table, view and function contained in the backup is dropped and recreated in <span className="font-mono">{target?.database}</span>.
+                  </>
+                )}{" "}
+                {engine.fileBased
+                  ? "The new file is written and checked first, then swapped in: if anything fails, the original is left unchanged."
+                  : engine.atomicRestore
                   ? "The restore runs in a single transaction, so it is all-or-nothing: if anything fails, the database is left unchanged."
                   : `${engine.label} can't restore in a single transaction: if the restore fails part-way, the database is left partially restored. Restoring into a new database first is safer.`}{" "}
                 Data written after the backup was taken will be lost.
@@ -309,8 +341,10 @@ export function RestoreWizard({
         }
         description={
           mode === "existing"
-            ? "Every object contained in the backup will be dropped and recreated in the target database."
-            : "DBVault will create a new database and restore the backup into it. Existing data is not touched."
+            ? engine.fileBased
+              ? "The target file will be replaced by the backup. Stop the application using it first."
+              : "Every object contained in the backup will be dropped and recreated in the target database."
+            : `DBVault will create a new ${newThing} and restore the backup into it. Existing data is not touched.`
         }
       >
         <div className="min-w-0 space-y-3">
@@ -324,21 +358,23 @@ export function RestoreWizard({
               <ArrowDown className="size-4" />
             </div>
             <SummaryRow
-              label={mode === "new" ? "Into new database" : "Over existing database"}
+              label={mode === "new" ? `Into new ${newThing}` : `Over existing ${newThing}`}
               title={mode === "new" ? newName : (target?.database ?? "—")}
-              detail={target ? `${target.name} · ${target.host}:${target.port}` : "—"}
+              detail={target ? `${target.name} · ${engine.fileBased ? "SQLite folder" : `${target.host}:${target.port}`}` : "—"}
               tone={mode === "existing" ? "danger" : "brand"}
             />
           </div>
           <ul className="space-y-1.5 text-sm text-muted-foreground">
             <SummaryStep>Checksum verified before anything is restored</SummaryStep>
-            {engine.atomicRestore ? (
+            {engine.fileBased ? (
+              <SummaryStep>Written to a temporary file, integrity-checked, then swapped in: all-or-nothing</SummaryStep>
+            ) : engine.atomicRestore ? (
               <SummaryStep>Restored in a single transaction: all-or-nothing</SummaryStep>
             ) : (
               <SummaryStep warn={mode === "existing"}>Not transactional: a failed restore can leave the target partially restored</SummaryStep>
             )}
             {mode === "new" ? (
-              <SummaryStep>Needs the {createPrivilege} on the target server</SummaryStep>
+              <SummaryStep>{engine.fileBased ? "Needs write access to the SQLite folder" : `Needs the ${createPrivilege} on the target server`}</SummaryStep>
             ) : (
               <SummaryStep warn>Data written after this backup was taken will be lost</SummaryStep>
             )}
