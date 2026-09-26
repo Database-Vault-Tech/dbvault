@@ -42,7 +42,7 @@ Checksum: 9f2c4e1a…
 
 | | |
 |---|---|
-| **Databases** | PostgreSQL 9.2 – 18, MySQL 5.7 – 9 and MariaDB 10 – 11, each with native dump tooling. SQL Server and SQLite are planned. See [docs/engines.md](docs/engines.md). |
+| **Databases** | PostgreSQL 9.2 – 18, MySQL 5.7 – 9 and MariaDB 10 – 11, each with native dump tooling, plus SQLite files from a mounted folder. SQL Server is planned. See [docs/engines.md](docs/engines.md). |
 | **Automated backups** | `pg_dump` (custom format) or `mariadb-dump` streamed through zstd/gzip → encryption → SHA-256 → upload in one pass. Memory stays bounded (≈60 MB for a 350 MB database). |
 | **Schedules** | Hourly, every 6 hours, daily, weekly or any cron expression, in any timezone. Runs server-side; duplicate runs are impossible by design. |
 | **S3 / R2 / MinIO / disk** | One storage abstraction over the S3 API (multipart, adaptive part sizes, aborted on failure) plus a sandboxed local filesystem backend. |
@@ -168,6 +168,7 @@ Everything is configured with environment variables; every one is documented in
 | `AUTH_SECRET` | 32+ chars. Signs CSRF tokens and keys session/API-token hashes. |
 | `DATABASE_URL`, `REDIS_URL` | DBVault's own PostgreSQL and Redis (set automatically in compose). |
 | `S3_*` | The built-in MinIO bucket offered as one-click storage. |
+| `SQLITE_HOST_DIR` | Host folder with SQLite files to protect, mounted at `/sqlite` (`SQLITE_ROOT`). Default `./data/sqlite`; must be read/write for uid 10001. |
 | `VERIFY_MODE` | `server` (default), `docker` or `disabled` — how restore tests run. |
 | `VERIFY_POSTGRES_URL`, `VERIFY_MYSQL_URL`, `VERIFY_MARIADB_URL` | Verification servers per engine for `VERIFY_MODE=server` (set in compose). |
 | `PG_BIN_DIR`, `MYSQL_BIN_DIR` | Where the worker finds `pg_dump`/`pg_restore` and `mariadb-dump`/`mariadb` when they're not on `PATH`. |
@@ -312,7 +313,7 @@ verify → restore → backup history.
 Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and our
 [Code of Conduct](CODE_OF_CONDUCT.md). Good first areas: new storage providers, Slack and
 Discord notification senders, more database version coverage in CI, and new engine drivers
-(SQL Server, SQLite) — see [docs/engines.md](docs/engines.md).
+(SQL Server) — see [docs/engines.md](docs/engines.md).
 
 ## Roadmap
 
