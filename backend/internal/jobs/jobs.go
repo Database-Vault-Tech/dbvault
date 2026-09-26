@@ -360,7 +360,7 @@ func SyncRelated(ctx context.Context, q db.DB, jobIDs []string, status, msg stri
 		return err
 	}
 	if _, err := q.Exec(ctx, `UPDATE restore_jobs SET status = $2, error = $3, completed_at = now()
-		WHERE job_id = ANY($1) AND status IN ('queued', 'running', 'verifying')`, jobIDs, status, msg); err != nil {
+		WHERE job_id = ANY($1) AND status IN ('queued', 'running', 'masking', 'verifying')`, jobIDs, status, msg); err != nil {
 		return err
 	}
 	verifyStatus := "failed"
