@@ -246,6 +246,9 @@ services:
   frontend:
     build:
       context: ./frontend
+      # docs/*.md, rendered into the /docs pages at build time.
+      additional_contexts:
+        docs: ./docs
       args:
         SITE_URL: ${SITE_URL:-https://dbvault.tech}
     image: dbvault/frontend:${DBVAULT_VERSION:-dev}
