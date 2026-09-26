@@ -14,6 +14,7 @@ const (
 	APITokenPrefix     = "dbv_"
 	ResetTokenPrefix   = "dbvr_"
 	InviteTokenPrefix  = "dbvi_"
+	MFATokenPrefix     = "dbvm_"
 )
 
 // Hasher derives lookup hashes for bearer secrets. Only HMAC-SHA256 digests
