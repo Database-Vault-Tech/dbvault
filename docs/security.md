@@ -10,7 +10,7 @@ how it protects them, and what you must do as an operator.
 | Database passwords, storage keys, webhook URLs & signing secrets | AES-256-GCM with `ENCRYPTION_KEY`, per-row associated data, never returned by the API, never logged |
 | Backup contents | age encryption (X25519 + ChaCha20-Poly1305) before upload; storage only sees ciphertext |
 | Backup encryption keys | Per-organization age identities, sealed with `ENCRYPTION_KEY` |
-| User accounts | argon2id password hashes; opaque server-side sessions; rate limiting |
+| User accounts | argon2id password hashes; optional TOTP two-factor authentication with recovery codes; opaque server-side sessions; rate limiting |
 | Tenancy | Every query scoped by organization; non-members get 404 |
 | Instance admin | Read-only, GET-only, browser sessions only; never sees credentials, storage config or backup contents; every organization view is audited in that organization |
 | Integrity | SHA-256 recorded at backup time, verified after upload and before every restore |
@@ -63,6 +63,40 @@ flowchart TD
   expiry.
 - Password reset: single-use, 1-hour, hashed tokens sent by email; the response never
   reveals whether an account exists; all sessions are revoked on reset.
+
+### Two-factor authentication
+
+Users can turn on TOTP two-factor authentication (RFC 6238: SHA-1, 6 digits, 30 seconds,
+which every authenticator app supports) under **Settings → Security**.
+
+- Setup re-checks the password, then shows a QR code and the base32 secret. Nothing changes
+  until the user enters a valid code; enabling signs out every other session.
+- The TOTP secret is sealed with `ENCRYPTION_KEY` (associated data `user:<id>:totp`). Codes
+  are accepted one step either side of now, and each accepted time step is recorded, so a
+  code can't be replayed.
+- Sign-in with 2FA is two requests. A correct password returns a short-lived challenge
+  token (`dbvm_…`, 5 minutes, hashed at rest, at most 5 code attempts) instead of a session.
+  The session cookie is only set once a valid code is presented.
+- Ten single-use recovery codes are issued when 2FA is enabled and can be regenerated.
+  Only HMAC-SHA256 digests (keyed with `AUTH_SECRET`, scoped to the user) are stored.
+- Turning 2FA off or regenerating recovery codes needs the password **and** a current code
+  or recovery code, and only works from a browser session. A leaked API token can't do
+  either.
+- `dbvault init` sends the code with the password when the server asks for one. Existing
+  API tokens keep working after 2FA is enabled; revoke any you don't recognize.
+- Password reset by email does **not** turn off 2FA, so control of someone's mailbox isn't
+  enough to take over their account.
+
+**Lost authenticator and recovery codes.** An operator with database access can turn
+2FA off for one account, after verifying the person's identity out of band:
+
+```sql
+BEGIN;
+UPDATE users SET totp_secret_encrypted = NULL, totp_enabled_at = NULL, totp_last_step = NULL
+  WHERE email = 'person@example.com';
+DELETE FROM user_recovery_codes WHERE user_id = (SELECT id FROM users WHERE email = 'person@example.com');
+COMMIT;
+```
 
 ## Request protection
 
@@ -142,7 +176,8 @@ scrubbed from error messages.
 ## Audit log
 
 Append-only records of: registration, logins and failed logins, logout, password changes
-and resets, API token creation/revocation, organization changes, invitations and role
+and resets, two-factor enable/disable, failed codes, recovery-code use and regeneration,
+API token creation/revocation, organization changes, invitations and role
 changes, recovery-key export, database/storage/schedule/notification changes, connection
 tests, backup start/completion/failure/deletion/download/expiry, verification results,
 restores and job cancellations. Entries include the actor, IP and user agent; metadata keys
