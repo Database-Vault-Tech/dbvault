@@ -472,6 +472,20 @@ export interface Session {
   current: boolean
 }
 
+export interface TwoFactorStatus {
+  enabled: boolean
+  enabled_at: string | null
+  recovery_codes_remaining: number
+}
+
+export interface TotpSetup {
+  secret: string
+  otpauth_uri: string
+}
+
+/** POST /auth/login: either a session was created, or a second factor is needed. */
+export type LoginResponse = { mfa_required: true; mfa_token: string; expires_at: string } | { mfa_required?: undefined; user: User; csrf_token: string }
+
 export interface ApiToken {
   id: string
   name: string
