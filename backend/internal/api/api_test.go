@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/base32"
 	"encoding/binary"
 	"encoding/json"
@@ -15,12 +16,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	_ "modernc.org/sqlite"
 
 	"github.com/dbvault/dbvault/backend/internal/api"
 	"github.com/dbvault/dbvault/backend/internal/app"
@@ -43,6 +46,10 @@ type env struct {
 
 var shared *env
 
+// sqliteRoot is the SQLITE_ROOT of the shared test app. It outlives any one
+// test (t.TempDir would be removed when the first test finishes).
+var sqliteRoot string
+
 // instanceAdminEmail is unique per run because the test database persists.
 var instanceAdminEmail = uniqueEmail("instance-admin")
 
@@ -55,6 +62,10 @@ func setup(t *testing.T) *env {
 	if shared != nil {
 		return shared
 	}
+	var err error
+	if sqliteRoot, err = os.MkdirTemp("", "dbvault-sqlite-root-"); err != nil {
+		t.Fatal(err)
+	}
 	key := make([]byte, 32)
 	for i := range key {
 		key[i] = byte(i * 7)
@@ -66,7 +77,7 @@ func setup(t *testing.T) *env {
 		LocalStorageRoot: t.TempDir(), WorkDir: t.TempDir(), WorkerConcurrency: 2, VerifyUploadedData: true,
 		VerifyMode: config.VerifyModeDisabled, RateLimitAuthPerMinute: 1000, RateLimitAPIPerMinute: 10000,
 		SMTP: config.SMTPConfig{TLSMode: "none"}, AllowPrivateNetworkTargets: true,
-		InstanceAdminEmails: []string{instanceAdminEmail},
+		InstanceAdminEmails: []string{instanceAdminEmail}, SQLiteRoot: sqliteRoot,
 	}
 	log := logging.NewWithWriter(io.Discard, "error", "test")
 	a, err := app.New(context.Background(), cfg, log, app.RoleAPI)
@@ -578,6 +589,115 @@ func TestTwoFactorAuthentication(t *testing.T) {
 	_ = e.app.Pool.QueryRow(context.Background(), `SELECT count(*) FROM user_recovery_codes c JOIN users u ON u.id = c.user_id WHERE u.email = $1`, email).Scan(&left)
 	if left != 0 {
 		t.Fatalf("recovery codes must be deleted with 2FA, %d left", left)
+	}
+}
+
+
+// TestSQLiteThroughAPI covers the SQLite flow the UI uses. It needs no
+// database server: restore tests run in a temporary folder on the worker.
+func TestSQLiteThroughAPI(t *testing.T) {
+	e := setup(t)
+	dir := filepath.Join(sqliteRoot, fmt.Sprintf("app-%d", time.Now().UnixNano()))
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rel := filepath.Base(dir)
+	src, err := sql.Open("sqlite", filepath.Join(dir, "shop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{`PRAGMA journal_mode=WAL`, `CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)`,
+		`WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 1234) INSERT INTO items (name) SELECT 'item ' || n FROM s`} {
+		if _, err := src.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer src.Close() // the app keeps it open during the backup
+
+	c := newClient(t, e)
+	register(t, c, "Lite")
+	engines := c.do("GET", "/api/database-engines", nil).list()
+	var lite map[string]any
+	for _, x := range engines {
+		if m := x.(map[string]any); m["name"] == "sqlite" {
+			lite = m
+		}
+	}
+	if lite == nil || lite["available"] != true || lite["capabilities"].(map[string]any)["file_based"] != true {
+		t.Fatalf("sqlite engine info: %v", lite)
+	}
+
+	for path, want := range map[string]string{"../etc/passwd": "database", "/etc/passwd": "database", "": "database"} {
+		if r := c.do("POST", "/api/databases", map[string]any{"name": "bad", "engine": "sqlite", "database": path}); r.Status != 422 || r.Body["error"].(map[string]any)["fields"].(map[string]any)[want] == nil {
+			t.Fatalf("path %q must be rejected: %d %s", path, r.Status, r.Raw)
+		}
+	}
+	dbReq := map[string]any{"name": "lite", "engine": "sqlite", "database": rel + "/shop.db"}
+	if r := c.do("POST", "/api/databases/test", dbReq); r.data()["ok"] != true || r.data()["server"].(map[string]any)["table_count"] != float64(1) {
+		t.Fatalf("test connection: %s", r.Raw)
+	}
+	r := c.do("POST", "/api/databases", dbReq)
+	if r.Status != 201 {
+		t.Fatalf("create: %d %s", r.Status, r.Raw)
+	}
+	d := r.data()["database"].(map[string]any)
+	if d["host"] != "" || d["port"] != float64(0) || d["username"] != "" {
+		t.Fatalf("file-based database must not store connection fields: %v", d)
+	}
+	dbID := d["id"].(string)
+
+	r = c.do("POST", "/api/storage", map[string]any{"name": "disk", "type": "local", "config": map[string]any{"path": "lite"}})
+	stID := r.data()["storage"].(map[string]any)["id"].(string)
+	if r := c.do("POST", "/api/schedules", map[string]any{"database_id": dbID, "storage_destination_id": stID, "preset": "daily",
+		"retention": map[string]int{"daily": 7, "weekly": 4, "monthly": 6}}); r.Status != 201 {
+		t.Fatalf("schedule: %d %s", r.Status, r.Raw)
+	}
+	r = c.do("POST", "/api/backups", map[string]any{"database_id": dbID})
+	backupID := r.data()["backup_id"].(string)
+	if job := waitJob(t, c, r.data()["job_id"].(string), time.Minute); job["status"] != "completed" {
+		t.Fatalf("backup job %v: %v", job["status"], job["error"])
+	}
+
+	// Restore testing works without Docker or a verification server.
+	r = c.do("POST", "/api/backups/"+backupID+"/verify", map[string]any{})
+	waitJob(t, c, r.data()["job_id"].(string), time.Minute)
+	b := c.do("GET", "/api/backups/"+backupID, nil).data()["backup"].(map[string]any)
+	v := b["verification"].(map[string]any)
+	if b["verification_status"] != "passed" || v["rows"] != float64(1234) {
+		t.Fatalf("verification: %v", b)
+	}
+
+	// Restores into a new file; paths are checked, and existing files aren't overwritten.
+	if r := c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": "../escape.db"}); r.Status != 422 {
+		t.Fatalf("escaping restore path: %d %s", r.Status, r.Raw)
+	}
+	if r := c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": rel + "/shop.db"}); r.Status != 422 {
+		t.Fatalf("restore over existing file as 'new': %d %s", r.Status, r.Raw)
+	}
+	r = c.do("POST", "/api/restores", map[string]any{"backup_id": backupID, "target_database_id": dbID, "mode": "new", "new_database_name": rel + "/restored.db"})
+	if r.Status != 202 {
+		t.Fatalf("restore: %d %s", r.Status, r.Raw)
+	}
+	restoreID := r.data()["id"].(string)
+	var status string
+	for i := 0; i < 100; i++ {
+		status = c.do("GET", "/api/restores/"+restoreID, nil).data()["restore"].(map[string]any)["status"].(string)
+		if status == "completed" || status == "failed" {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if status != "completed" {
+		t.Fatalf("restore status %s: %s", status, c.do("GET", "/api/restores/"+restoreID, nil).Raw)
+	}
+	rc, err := sql.Open("sqlite", filepath.Join(dir, "restored.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	var n int
+	if err := rc.QueryRow("SELECT count(*) FROM items").Scan(&n); err != nil || n != 1234 {
+		t.Fatalf("restored rows = %d (%v), want 1234", n, err)
 	}
 }
 
