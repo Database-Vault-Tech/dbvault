@@ -16,6 +16,9 @@
 .DS_Store
 *.swp
 
+# Local SQLite files mounted into DBVault (SQLITE_HOST_DIR default)
+/data/
+
 # Test artefacts
 coverage.out
 *.test
